@@ -145,7 +145,7 @@ class RenderFiguresBackendTests(unittest.TestCase):
 
         self.assertEqual(preferred_backends(self.workdir)[0], preferred)
         manifest = render_figures(self.workdir, business)
-        self.assertEqual(manifest["backends"][0], preferred)
+        self.assertEqual(manifest["dot"]["backends"][0], preferred)
 
     def test_no_backend_yields_error_status_not_fake_success(self) -> None:
         business = design_business({"architecture": ARCHITECTURE_DOT})

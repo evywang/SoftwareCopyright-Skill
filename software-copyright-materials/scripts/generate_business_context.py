@@ -287,6 +287,35 @@ def write_model_template(path: Path, evidence: dict[str, Any]) -> None:
                 "声明后由 scripts/render_design_figures.py 渲染成 PNG 并嵌入正文；不声明或渲染失败时正文保留【图预留】占位。",
                 "architecture": "digraph G { rankdir=TB; 调度器 [shape=box]; 采集任务 [shape=box]; 通信任务 [shape=box]; 指令任务 [shape=box]; 采集任务 -> 队列 [label=数据]; 队列 -> 通信任务; 指令任务 -> 驱动层; }",
             },
+            "sequences": {
+                "_说明": "可选。Archify 序列图（时序图），优先用于接口调用链和功能请求处理流程；"
+                "spec 使用 Archify 原生 schema（participants + messages，schema_version 1，diagram_type sequence），"
+                "由 scripts/render_design_figures.py 交付为 HTML 后截图成 PNG 嵌入正文；"
+                "未安装 Archify 时正文保留【图预留】占位。",
+                "id": "fullscan",
+                "title": "全景功能接口调用时序",
+                "type": "sequence",
+                "spec": {
+                    "schema_version": 1,
+                    "diagram_type": "sequence",
+                    "meta": {"title": "全景功能接口调用时序", "quality_profile": "showcase",
+                             "viewBox": [1080, 560]},
+                    "participants": [
+                        {"id": "client", "type": "external", "label": "上位机"},
+                        {"id": "api", "type": "backend", "label": "应用层接口"},
+                        {"id": "queue", "type": "backend", "label": "数据队列"},
+                        {"id": "db", "type": "database", "label": "数据库"},
+                    ],
+                    "messages": [
+                        {"from": "client", "to": "api", "label": "fullscan(...)"},
+                        {"from": "api", "to": "db", "label": "查询"},
+                        {"from": "db", "to": "api", "label": "返回"},
+                        {"from": "api", "to": "queue", "label": "写入数据"},
+                        {"from": "queue", "to": "api", "label": "取数"},
+                        {"from": "api", "to": "client", "label": "输出报文"},
+                    ],
+                },
+            },
         },
         "system_requirements": [
             {"item": "操作系统", "minimum": "按项目实际填写", "recommended": "按项目实际填写"},
@@ -461,7 +490,36 @@ def normalize_design_spec(model: dict[str, Any]) -> dict[str, Any]:
         "api_groups": normalize_api_groups(spec.get("api_groups")),
         "error_handling": _design_items(spec.get("error_handling"), "error_handling", ("title", "description")),
         "figures": normalize_figures(spec),
+        "sequences": normalize_sequence_specs(spec),
     }
+
+
+def normalize_sequence_specs(spec: dict[str, Any]) -> list[dict[str, Any]]:
+    """Validate Archify sequence specs (structure only; archify validates the schema at render time)."""
+    raw = spec.get("sequences")
+    if not raw:
+        return []
+    if not isinstance(raw, list):
+        raise SystemExit("design_spec field must be a list: sequences")
+    sequences: list[dict[str, Any]] = []
+    for index, item in enumerate(raw, start=1):
+        if not isinstance(item, dict):
+            raise SystemExit(f"design_spec.sequences item {index} must be an object")
+        sequence_id = str(item.get("id") or "").strip()
+        title = str(item.get("title") or "").strip()
+        spec_data = item.get("spec")
+        if not sequence_id or not title or not isinstance(spec_data, dict):
+            raise SystemExit(
+                f"design_spec.sequences item {index} requires id, title and spec (Archify JSON)"
+            )
+        sequences.append({
+            "id": sequence_id,
+            "title": title,
+            "type": str(item.get("type") or item.get("diagram_type") or "sequence").strip(),
+            "spec": spec_data,
+        })
+    return sequences
+
 
 
 def normalize_figures(spec: dict[str, Any]) -> dict[str, str]:

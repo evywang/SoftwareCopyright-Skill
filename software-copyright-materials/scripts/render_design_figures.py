@@ -1,22 +1,25 @@
 #!/usr/bin/env python3
-"""Render DOT figures declared in the design spec into PNG files.
+"""Render DOT and Archify figures declared in the design spec into PNG files.
 
-Figures are declared in design_spec.figures keyed by slot: architecture,
-key_1..key_N (key_designs) and function_1..function_N (functions). Each value
-is a DOT language source. Rendered PNGs go to 软件著作权申请资料/草稿/图纸/ and
-a 图纸清单.json is written for the draft generator to reference.
+DOT figures are declared in design_spec.figures keyed by slot: architecture,
+key_1..key_N (key_designs) and function_1..function_N (functions). Archify
+sequence/interaction diagrams are declared in design_spec.sequences. All PNGs
+go to 软件著作权申请资料/草稿/图纸/ and a 图纸清单.json is written for the
+draft generator to reference.
 
-Rendering uses the first working backend on this system, detected at runtime:
-dot -Tpng, or dot -Tsvg plus an external SVG converter (cairosvg / inkscape /
-librsvg / imagemagick). The preferred backend is read from 环境检查.json when
-present, otherwise probed on the fly. Rendering failures never fake success:
-failed slots keep their visible 【图预留】 text and are recorded with status
-"error" in the manifest.
+DOT rendering uses the first working backend on this system, detected at
+runtime: dot -Tpng, or dot -Tsvg plus an external SVG converter (cairosvg /
+inkscape / librsvg / imagemagick). Archify sequences are delivered to self-
+contained HTML and screenshotted to PNG via a headless browser. The preferred
+backend is read from 环境检查.json when present, otherwise probed on the fly.
+Rendering failures never fake success: failed slots keep their visible
+【图预留】 text and are recorded with status "error" in the manifest.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import shutil
 import subprocess
@@ -27,7 +30,9 @@ from typing import Any
 from common import (
     DIAGRAM_BACKEND_ORDER,
     DOT_LAYOUT_DPI,
+    archify_install_hint,
     check_png_layout,
+    detect_archify,
     detect_diagram_backends,
     diagram_install_hint,
     ensure_dir,
@@ -35,11 +40,14 @@ from common import (
     normalize_dot_source,
     read_json,
     safe_filename,
+    screenshot_html_to_png,
     write_json,
 )
 
 
 FIGURE_KEY_RE = re.compile(r"^(architecture|key_[1-9][0-9]*|function_[1-9][0-9]*)$")
+
+ARCHIFY_ESSENTIAL_TYPES = {"sequence", "workflow", "architecture", "dataflow", "lifecycle"}
 
 
 def normalize_figures(spec: dict[str, Any]) -> dict[str, str]:
@@ -80,6 +88,96 @@ def figure_order(keys: list[str]) -> list[str]:
         return (slot, int(match.group(2)))
 
     return sorted(keys, key=sort_key)
+
+
+def normalize_sequences(spec: dict[str, Any]) -> list[dict[str, Any]]:
+    """Validate Archify sequence specs declared under design_spec.sequences.
+
+    Archify uses its own JSON schema (participants/messages, not nodes/edges).
+    The model authors Archify-native specs, so this check is intentionally
+    light — Archify's own validator catches schema errors at render time.
+    """
+    raw = spec.get("sequences")
+    if not raw:
+        return []
+    if not isinstance(raw, list):
+        raise SystemExit("design_spec field must be a list: sequences")
+    archify = detect_archify()
+    sequences: list[dict[str, Any]] = []
+    for index, item in enumerate(raw, start=1):
+        if not isinstance(item, dict):
+            raise SystemExit(f"design_spec.sequences item {index} must be an object")
+        sequence_id = str(item.get("id") or "").strip()
+        title = str(item.get("title") or "").strip()
+        sequence_type = str(item.get("type") or item.get("diagram_type") or "sequence").strip()
+        spec_data = item.get("spec")
+        if not sequence_id or not title or not isinstance(spec_data, dict):
+            raise SystemExit(
+                f"design_spec.sequences item {index} requires id, title and spec (Archify JSON)"
+            )
+        if sequence_type not in ARCHIFY_ESSENTIAL_TYPES:
+            raise SystemExit(
+                f"design_spec.sequences item {index} type must be one of "
+                f"{sorted(ARCHIFY_ESSENTIAL_TYPES)}; got: {sequence_type}"
+            )
+        if not archify:
+            raise SystemExit(
+                f"sequence {sequence_id} 需要 Archify 但未检测到。{archify_install_hint()}"
+            )
+        # Coerce diagram_type inside the spec to match the declared type.
+        spec_data = dict(spec_data)
+        spec_data.setdefault("diagram_type", sequence_type)
+        spec_data.setdefault("schema_version", spec_data.get("schema_version", 1))
+        sequences.append({
+            "id": sequence_id,
+            "title": title,
+            "type": sequence_type,
+            "spec": spec_data,
+        })
+    return sequences
+
+
+def render_sequence(sequence: dict[str, Any], figure_dir: Path, work_root: Path, index: int) -> dict[str, Any]:
+    """Render one Archify sequence to PNG via CLI + headless screenshot."""
+    archify = detect_archify()
+    sequence_id = sequence["id"]
+    prefix = f"seq-{index:02d}-{safe_filename(sequence_id)}"
+    json_path = work_root / "草稿" / f".archify-{prefix}.json"
+    html_path = work_root / "草稿" / f"{prefix}.html"
+    output = figure_dir / f"{prefix}.png"
+    manifest: dict[str, Any] = {
+        "key": sequence_id, "path": f"图纸/{output.name}",
+        "title": sequence["title"], "kind": "sequence", "type": sequence["type"],
+    }
+    try:
+        json_path.write_text(json.dumps(sequence["spec"], ensure_ascii=False, indent=2), encoding="utf-8")
+        completed = subprocess.run(
+            [sys.executable, archify, "deliver", sequence["type"], str(json_path), str(html_path),
+             "--quality", "showcase"],
+            capture_output=True, timeout=180, check=False,
+        )
+        if completed.returncode != 0:
+            detail = completed.stderr.decode("utf-8", errors="replace").strip().splitlines()
+            manifest["status"] = "error"
+            manifest["error"] = detail[-1] if detail else f"archify deliver exit {completed.returncode}"
+            return manifest
+        error = screenshot_html_to_png(html_path, output)
+        if error:
+            manifest["status"] = "error"
+            manifest["error"] = error
+            return manifest
+        manifest["status"] = "ok"
+        manifest["backend"] = "archify"
+        allow_wide = bool(re.search(r"\brankdir\s*=\s*LR\b", str(sequence.get("layout") or "")))
+        manifest["layout"] = check_png_layout(output, allow_wide=allow_wide)
+        return manifest
+    except (OSError, subprocess.SubprocessError) as exc:
+        manifest["status"] = "error"
+        manifest["error"] = f"Archify 渲染异常：{exc}"
+        return manifest
+    finally:
+        for path in (json_path, html_path):
+            path.unlink(missing_ok=True)
 
 
 def _render_with_backend(dot_source: str, output: Path, backend: str, work_root: Path) -> tuple[str | None, list[str]]:
@@ -195,39 +293,50 @@ def preferred_backends(workdir: Path) -> list[str]:
 def render_figures(workdir: Path, business: dict[str, Any]) -> dict[str, Any]:
     draft_dir = workdir / "草稿"
     spec = business.get("design_spec") or {}
-    figures = normalize_figures(spec)
     figure_dir = ensure_dir(draft_dir / "图纸")
-    backends = preferred_backends(workdir)
-    manifest: dict[str, Any] = {"method": "dot", "backends": backends, "figures": []}
-    for index, key in enumerate(figure_order(list(figures)), start=1):
-        filename = f"{index:02d}-{safe_filename(key)}.png"
-        output = figure_dir / filename
-        blocking, advisory = lint_dot_source(figures[key])
-        figure_manifest: dict[str, Any] = {"key": key, "path": f"图纸/{filename}", "lint": advisory}
-        if blocking:
-            figure_manifest["status"] = "error"
-            figure_manifest["error"] = "；".join(blocking) + "；请用 \\n 换行或 <BR/> 后重跑"
-            manifest["figures"].append(figure_manifest)
-            continue
-        error = f"无可用渲染后端（{diagram_install_hint()}）" if not backends else None
-        used_backend = ""
-        render_warnings: list[str] = []
-        for backend in backends:
-            error, render_warnings = _render_with_backend(figures[key], output, backend, draft_dir)
-            if error is None:
-                used_backend = backend
-                break
-        if error:
-            figure_manifest["status"] = "error"
-            figure_manifest["error"] = error
-        else:
-            figure_manifest["status"] = "ok"
-            figure_manifest["backend"] = used_backend
-            advisory = advisory + render_warnings
-            figure_manifest["lint"] = advisory
-            allow_wide = bool(re.search(r"\brankdir\s*=\s*LR\b", figures[key]))
-            figure_manifest["layout"] = check_png_layout(output, allow_wide=allow_wide)
-        manifest["figures"].append(figure_manifest)
+
+    manifest: dict[str, Any] = {"figures": [], "sequences": []}
+
+    figures = normalize_figures(spec)
+    if figures:
+        backends = preferred_backends(workdir)
+        dot_manifest = {"method": "dot", "backends": backends, "figures": []}
+        for index, key in enumerate(figure_order(list(figures)), start=1):
+            filename = f"{index:02d}-{safe_filename(key)}.png"
+            output = figure_dir / filename
+            blocking, advisory = lint_dot_source(figures[key])
+            figure_manifest: dict[str, Any] = {"key": key, "path": f"图纸/{filename}", "lint": advisory}
+            if blocking:
+                figure_manifest["status"] = "error"
+                figure_manifest["error"] = "；".join(blocking) + "；请用 \\n 换行或 <BR/> 后重跑"
+                dot_manifest["figures"].append(figure_manifest)
+                continue
+            error = f"无可用渲染后端（{diagram_install_hint()}）" if not backends else None
+            used_backend = ""
+            render_warnings: list[str] = []
+            for backend in backends:
+                error, render_warnings = _render_with_backend(figures[key], output, backend, draft_dir)
+                if error is None:
+                    used_backend = backend
+                    break
+            if error:
+                figure_manifest["status"] = "error"
+                figure_manifest["error"] = error
+            else:
+                figure_manifest["status"] = "ok"
+                figure_manifest["backend"] = used_backend
+                advisory = advisory + render_warnings
+                figure_manifest["lint"] = advisory
+                allow_wide = bool(re.search(r"\brankdir\s*=\s*LR\b", figures[key]))
+                figure_manifest["layout"] = check_png_layout(output, allow_wide=allow_wide)
+            dot_manifest["figures"].append(figure_manifest)
+        manifest["dot"] = dot_manifest
+        manifest["figures"] = dot_manifest["figures"]
+
+    sequences = normalize_sequences(spec)
+    for index, sequence in enumerate(sequences, start=1):
+        manifest["sequences"].append(render_sequence(sequence, figure_dir, workdir, index))
+
     write_json(draft_dir / "图纸清单.json", manifest)
     return manifest
 
@@ -244,21 +353,24 @@ def main() -> None:
         return
     manifest = render_figures(workdir, business)
     figures = manifest.get("figures") or []
-    if not figures:
-        print("OK figures: 业务理解未声明图纸，技术方案文档保留【图预留】占位")
+    sequences = manifest.get("sequences") or []
+    if not figures and not sequences:
+        print("OK figures: 业务理解未声明图纸/序列图，技术方案文档保留【图预留】占位")
         return
-    failed = [figure for figure in figures if figure.get("status") != "ok"]
     for figure in figures:
         if figure.get("status") == "ok":
             print(f"OK figure: {figure['key']} -> {figure['path']}（{figure.get('backend')}）")
+    for sequence in sequences:
+        if sequence.get("status") == "ok":
+            print(f"OK sequence: {sequence['key']} -> {sequence['path']}（archify）")
+    failed = [f for f in figures if f.get("status") != "ok"] + [s for s in sequences if s.get("status") != "ok"]
     if failed:
         print("STOP_FOR_USER")
-        for figure in failed:
-            print(f"NEXT_ACTION: 图纸 {figure['key']} 渲染失败：{figure.get('error')}")
-        print(f"可安装 graphviz 后重跑（{diagram_install_hint()}），"
-              "或从 design_spec.figures 删除该图让正文保留【图预留】占位。")
+        for item in failed:
+            print(f"NEXT_ACTION: {'序列图' if item.get('kind') == 'sequence' else '图纸'} {item['key']} 渲染失败：{item.get('error')}")
         return
-    print(f"OK figures: {len(figures)} 张图纸已渲染到 软件著作权申请资料/草稿/图纸/")
+    total = len(figures) + len(sequences)
+    print(f"OK figures: {total} 张（DOT {len(figures)} / Archify {len(sequences)}）已渲染到 软件著作权申请资料/草稿/图纸/")
 
 
 if __name__ == "__main__":
