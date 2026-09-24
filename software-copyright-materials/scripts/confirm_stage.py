@@ -13,6 +13,7 @@ from common import (
     confirmation_is_current,
     confirmation_payload_sha256,
     draft_completeness_issues,
+    draft_manual_kind,
     draft_snapshot,
     file_sha256,
     read_json,
@@ -264,10 +265,13 @@ def confirm_markdown(workdir: Path, note: str) -> Path:
     selection_issue = current_confirmation_issue(selection, "代码文件选择")
     if selection_issue:
         issues.append(selection_issue)
-    if not screenshot.exists() or not read_json(screenshot).get("screenshot_method_confirmed"):
-        issues.append("截图方式尚未确认")
-    elif read_json(screenshot).get("screenshot_method") not in SCREENSHOT_METHODS:
-        issues.append("截图方式已失效，请重新选择 Playwright CLI 自动截图、用户自行截图或跳过截图")
+    if draft_manual_kind(workdir / "草稿") == "operation":
+        if not screenshot.exists() or not read_json(screenshot).get("screenshot_method_confirmed"):
+            issues.append("截图方式尚未确认")
+        elif read_json(screenshot).get("screenshot_method") not in SCREENSHOT_METHODS:
+            issues.append("截图方式已失效，请重新选择 Playwright CLI 自动截图、用户自行截图或跳过截图")
+    elif screenshot.exists():
+        issues.append("技术方案文档（无界面软件）不需要选择截图方式；请删除 截图方式确认.json 或改回操作手册模式")
     if not fields.exists() or not read_json(fields).get("application_fields_confirmed"):
         issues.append("申请表字段尚未确认")
     else:

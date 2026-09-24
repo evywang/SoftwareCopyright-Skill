@@ -604,6 +604,348 @@ def append_flow_canonical(lines: list[str], software_name: str, flow: list[str],
     return start_index + 1
 
 
+DESIGN_GUI_WORDS = ("页面", "点击", "按钮", "弹窗", "下拉", "菜单", "登录", "输入框", "截图预留")
+DESIGN_REQUIRED_HEADINGS = (
+    "## 一、引言",
+    "## 二、软件总体设计",
+    "### 2.1 软件需求概括",
+    "### 2.2 需求概述",
+    "### 2.3 条件与限制",
+    "### 2.4 总体结构和模块接口设计",
+    "### 2.5 模块功能逻辑关系",
+    "### 2.6 设计和描述",
+    "## 三、软件功能描述",
+    "## 四、接口设计",
+    "### 4.1 软件界面",
+    "### 4.2 API接口",
+    "### 4.3 出错处理设计",
+)
+
+
+def normalize_design_spec_from_business(business: dict[str, Any]) -> dict[str, Any]:
+    """Validate the design spec in the confirmed business context before rendering."""
+    spec = business.get("design_spec")
+    if not isinstance(spec, dict):
+        raise SystemExit(
+            "STOP_FOR_USER\n"
+            "NEXT_ACTION: 业务理解缺少 `design_spec`。无界面软件（manual_kind=design）必须由模型按真实项目设计"
+            "补全 design_spec（需求、条件与限制、总体结构、模块表、功能设计、接口设计、出错处理）后再生成技术方案文档。"
+        )
+    for field in ("requirements", "conditions", "architecture", "modules", "overview", "functions", "api_groups", "error_handling"):
+        value = spec.get(field)
+        if field in ("requirements", "modules", "functions", "api_groups", "error_handling"):
+            valid = isinstance(value, list) and bool(value)
+        else:
+            valid = bool(str(value or "").strip())
+        if not valid:
+            raise SystemExit(
+                "STOP_FOR_USER\n"
+                f"NEXT_ACTION: design_spec.{field} 不能为空。请模型按真实项目设计补全后再生成技术方案文档。"
+            )
+    return spec
+
+
+def interface_short_name(signature: str) -> str:
+    match = re.match(r"^[A-Za-z_][\w\s\*&:<>,]*?\b([A-Za-z_]\w*)\s*\(", signature.strip())
+    if match:
+        return match.group(1)
+    return signature.strip()[:40]
+
+
+def rendered_figure(figures: list[dict[str, Any]] | None, key: str) -> dict[str, Any] | None:
+    for figure in figures or []:
+        if isinstance(figure, dict) and figure.get("key") == key and figure.get("status") == "ok":
+            return figure
+    return None
+
+
+def figure_markup(
+    figures: list[dict[str, Any]] | None,
+    key: str,
+    title: str,
+    figure_text: str,
+    default_placeholder: str = "",
+) -> str:
+    rendered = rendered_figure(figures, key)
+    if rendered:
+        return f"![{title}]({rendered['path']})"
+    if str(figure_text or "").strip():
+        return f"【图预留：请在此处插入“{title}”{figure_text}。】"
+    return default_placeholder
+
+
+def render_design_doc(
+    software_name: str,
+    version: str,
+    business: dict[str, Any],
+    spec: dict[str, Any],
+    figures: list[dict[str, Any]] | None = None,
+) -> str:
+    positioning = plain_manual_text(business.get("product_positioning") or "")
+    if positioning and not positioning.endswith("。"):
+        positioning += "。"
+    features = [plain_manual_text(item) for item in (business.get("business_features") or []) if str(item).strip()]
+
+    lines: list[str] = [f"# {software_name}技术方案文档", ""]
+
+    lines.extend(["## 一、引言", ""])
+    lines.append(f"本技术方案文档提供了对{software_name} {version}软件静态和动态形态的描述，是软件编码过程中的指导文档。")
+    intro_note = str(spec.get("intro_note") or "").strip()
+    if intro_note:
+        lines.extend(["", intro_note])
+
+    lines.extend(["", "## 二、软件总体设计", ""])
+    lines.extend(["### 2.1 软件需求概括", ""])
+    if positioning:
+        lines.extend([positioning, ""])
+    if features:
+        lines.extend([f"{software_name} {version}主要有以下几方面的功能：", ""])
+        for index, feature in enumerate(features, start=1):
+            lines.append(f"（{index}）{feature}；")
+        lines.append("")
+
+    lines.extend(["### 2.2 需求概述", ""])
+    requirements = [str(item).strip() for item in spec.get("requirements") or [] if str(item).strip()]
+    for index, item in enumerate(requirements, start=1):
+        lines.append(f"{index}. {item}")
+    lines.append("")
+
+    lines.extend(["### 2.3 条件与限制", ""])
+    lines.extend([str(spec.get("conditions") or "").strip(), ""])
+
+    lines.extend(["### 2.4 总体结构和模块接口设计", ""])
+    lines.extend([str(spec.get("architecture") or "").strip(), ""])
+    architecture_markup = figure_markup(
+        figures, "architecture", "软件整体结构框架图", "",
+        default_placeholder="【图预留：请在此处插入“软件整体结构框架图”。】",
+    )
+    if architecture_markup:
+        lines.extend([architecture_markup, ""])
+
+    lines.extend(["### 2.5 模块功能逻辑关系", ""])
+    lines.append("软件详细的模块信息如下表所示：")
+    lines.extend(["", "| 模块名 | 功能描述 |", "| --- | --- |"])
+    for module in spec.get("modules") or []:
+        name = str(module.get("name") or "").strip()
+        description = str(module.get("description") or "").strip()
+        lines.append(f"| {name} | {description} |")
+    module_note = str(spec.get("module_note") or "").strip()
+    lines.append("")
+    if module_note:
+        lines.extend([module_note, ""])
+
+    lines.extend(["### 2.6 设计和描述", ""])
+    lines.extend([str(spec.get("overview") or "").strip(), ""])
+    for index, item in enumerate(spec.get("key_designs") or [], start=1):
+        title = str(item.get("title") or "").strip()
+        description = str(item.get("description") or "").strip()
+        lines.extend([f"#### 2.6.{index} {title}", "", description, ""])
+        key_markup = figure_markup(figures, f"key_{index}", title, str(item.get("figure") or ""))
+        if key_markup:
+            lines.extend([key_markup, ""])
+
+    lines.extend(["## 三、软件功能描述", ""])
+    for index, item in enumerate(spec.get("functions") or [], start=1):
+        title = str(item.get("title") or "").strip()
+        description = str(item.get("description") or "").strip()
+        lines.extend([f"### 3.{index} {title}", "", description, ""])
+        function_markup = figure_markup(figures, f"function_{index}", title, str(item.get("figure") or ""))
+        if function_markup:
+            lines.extend([function_markup, ""])
+
+    lines.extend(["## 四、接口设计", ""])
+    lines.extend(["### 4.1 软件界面", ""])
+    lines.extend([str(spec.get("ui_statement") or "无。").strip(), ""])
+
+    lines.extend(["### 4.2 API接口", ""])
+    for group_index, group in enumerate(spec.get("api_groups") or [], start=1):
+        group_title = str(group.get("title") or "").strip()
+        summary = str(group.get("summary") or "").strip()
+        lines.extend([f"#### 4.2.{group_index} {group_title}", ""])
+        if summary:
+            lines.extend([summary, ""])
+        for iface_index, iface in enumerate(group.get("interfaces") or [], start=1):
+            signature = str(iface.get("signature") or "").strip()
+            description = str(iface.get("description") or "").strip()
+            params = iface.get("params") or []
+            returns = str(iface.get("returns") or "").strip()
+            lines.extend([f"##### 4.2.{group_index}.{iface_index} {interface_short_name(signature)}", ""])
+            lines.extend(["**接口名称**", "", signature, ""])
+            lines.extend(["**接口说明**", "", description, ""])
+            lines.extend(["**参数说明**", ""])
+            if params:
+                lines.extend(["| 序号 | 参数名称 | 类型 | 取值说明 |", "| --- | --- | --- | --- |"])
+                for param_index, param in enumerate(params, start=1):
+                    lines.append(
+                        f"| {param_index} | {param.get('name', '')} | {param.get('type', '')} | {param.get('detail', '')} |"
+                    )
+            else:
+                lines.append("无。")
+            lines.append("")
+            lines.extend(["**返回结果**", "", returns or "无。", ""])
+
+    lines.extend(["### 4.3 出错处理设计", ""])
+    for index, item in enumerate(spec.get("error_handling") or [], start=1):
+        title = str(item.get("title") or "").strip()
+        description = str(item.get("description") or "").strip()
+        lines.extend([f"#### 4.3.{index} {title}", "", description, ""])
+
+    lines.extend(
+        [
+            "```text",
+            "STOP_FOR_USER",
+            "NEXT_ACTION: 请一次性确认完整技术方案文档草稿是否与真实设计一致；必要时先统一修改段落内容，再运行 confirm_stage.py --stage markdown。",
+            "```",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def design_quality_issues(
+    text: str, spec: dict[str, Any], figures: list[dict[str, Any]] | None = None
+) -> list[str]:
+    issues: list[str] = []
+    for heading in DESIGN_REQUIRED_HEADINGS:
+        if heading not in text:
+            issues.append(f"缺少必备章节标题：{heading}")
+    found_gui_words = sorted({word for word in DESIGN_GUI_WORDS if word in text})
+    if found_gui_words:
+        issues.append(
+            "正文出现面向图形界面的词汇（" + "、".join(found_gui_words) + "）；无界面软件的技术方案文档不应描述页面或界面操作，请改写为设备/模块行为"
+        )
+    for module in spec.get("modules") or []:
+        name = str(module.get("name") or "").strip()
+        if name and f"| {name} |" not in text:
+            issues.append(f"模块信息表缺少模块行：{name}")
+    declared_figure_keys = [str(key) for key in (spec.get("figures") or {}) if str(key).strip()]
+    if declared_figure_keys:
+        rendered_keys = {
+            str(figure.get("key") or "")
+            for figure in figures or []
+            if isinstance(figure, dict) and figure.get("status") == "ok"
+        }
+        missing = [key for key in declared_figure_keys if key not in rendered_keys]
+        if missing:
+            issues.append("声明了图纸但未渲染成功：" + "、".join(missing) + "；正文保留【图预留】占位")
+    declared_slots = [("architecture", "结构框架图")]
+    for index, item in enumerate(spec.get("key_designs") or [], start=1):
+        if str(item.get("figure") or "").strip():
+            declared_slots.append((f"key_{index}", str(item["figure"])))
+    for index, item in enumerate(spec.get("functions") or [], start=1):
+        if str(item.get("figure") or "").strip():
+            declared_slots.append((f"function_{index}", str(item["figure"])))
+    rendered_keys = {
+        str(figure.get("key") or "")
+        for figure in figures or []
+        if isinstance(figure, dict) and figure.get("status") == "ok"
+    }
+    unrendered = [key for key, _figure in declared_slots if key not in rendered_keys]
+    if text.count("【图预留") < len(unrendered):
+        issues.append("声明的架构图/流程图缺少可见的【图预留】占位说明")
+    for group in spec.get("api_groups") or []:
+        for iface in group.get("interfaces") or []:
+            signature = str(iface.get("signature") or "").strip()
+            if signature and signature not in text:
+                issues.append(f"接口设计缺少接口签名：{interface_short_name(signature)}")
+    for leftover in ("待用户确认", "按项目实际填写"):
+        if leftover in text:
+            issues.append(f"正文残留占位文字：{leftover}")
+    return issues
+
+
+def build_design_text(
+    analysis: dict[str, Any],
+    software_name: str,
+    version: str,
+    business: dict[str, Any],
+    spec: dict[str, Any],
+    figures: list[dict[str, Any]] | None = None,
+) -> tuple[str, list[dict[str, Any]]]:
+    text = render_design_doc(software_name, version, business, spec, figures)
+    records = [
+        {"round": 1, "action": "初稿生成", "issues": design_quality_issues(text, spec, figures)},
+        {"round": 2, "action": "设计要素复核", "issues": design_quality_issues(text, spec, figures)},
+        {"round": 3, "action": "界面词汇与结构复核", "issues": design_quality_issues(text, spec, figures)},
+    ]
+    if records[-1]["issues"]:
+        records.append(
+            {
+                "round": 4,
+                "action": "复核仍需模型回到业务理解补写",
+                "issues": design_quality_issues(text, spec, figures),
+            }
+        )
+    return text, records
+
+
+def collect_layout_notes(manifest: dict[str, Any]) -> list[str]:
+    """Collect advisory layout notes from the figure manifest for the self-check record."""
+    notes: list[str] = []
+    for figure in manifest.get("figures") or []:
+        if figure.get("status") != "ok":
+            continue
+        for issue in figure.get("lint") or []:
+            notes.append(f"{figure['key']}：{issue}")
+        for issue in figure.get("layout") or []:
+            notes.append(f"{figure['key']}：{issue}")
+    return notes
+
+
+def write_design_review_records(
+    out_dir: Path,
+    records: list[dict[str, Any]],
+    spec: dict[str, Any],
+    figures: list[dict[str, Any]] | None = None,
+    layout_notes: list[str] | None = None,
+) -> None:
+    (out_dir / "技术方案文档自检记录.json").write_text(
+        json.dumps(
+            {
+                "rounds": records,
+                "module_count": len(spec.get("modules") or []),
+                "interface_count": sum(len(group.get("interfaces") or []) for group in spec.get("api_groups") or []),
+                "figure_count": len(figures or []),
+                "layout_notes": layout_notes or [],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    lines = ["# 技术方案文档自检记录", ""]
+    for record in records:
+        lines.extend([f"## 第 {record['round']} 轮：{record['action']}", ""])
+        if record["issues"]:
+            lines.extend(f"- {issue}" for issue in record["issues"])
+        else:
+            lines.append("- 未发现需继续修正的问题")
+        lines.append("")
+    if layout_notes:
+        lines.extend(["## 图纸布局提示", ""])
+        lines.extend(f"- {note}" for note in layout_notes)
+        lines.append("")
+    lines.extend(["## 模块清单", ""])
+    lines.extend(f"- {module.get('name', '')}" for module in spec.get("modules") or [])
+    (out_dir / "技术方案文档自检记录.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def write_design_doc(
+    path: Path,
+    analysis: dict[str, Any],
+    software_name: str,
+    version: str,
+    business: dict[str, Any],
+    figures: list[dict[str, Any]] | None = None,
+    layout_notes: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    spec = normalize_design_spec_from_business(business)
+    text, records = build_design_text(analysis, software_name, version, business, spec, figures)
+    path.write_text(text, encoding="utf-8")
+    write_design_review_records(path.parent, records, spec, figures, layout_notes)
+    return records
+
+
 def render_manual_canonical(
     software_name: str,
     version: str,
@@ -769,7 +1111,7 @@ def require_confirmed_business(business: dict[str, Any] | None) -> None:
     if business is None:
         raise SystemExit(
             "STOP_FOR_USER\n"
-            "NEXT_ACTION: 操作手册必须基于已确认的业务理解生成。请先生成并确认 草稿/业务理解.md。"
+            "NEXT_ACTION: 文档草稿必须基于已确认的业务理解生成。请先生成并确认 草稿/业务理解.md。"
         )
     if business.get("confirmation_required") and not business.get("user_confirmed"):
         raise SystemExit(
@@ -792,6 +1134,33 @@ def main() -> None:
     business = read_json(Path(args.business_context)) if args.business_context else None
     require_confirmed_business(business)
     out_dir = ensure_dir(Path(args.out_dir))
+    doc_kind = "design" if business and business.get("manual_kind") == "design" else "operation"
+    if doc_kind == "design":
+        out_path = out_dir / "技术方案文档.md"
+        figures: list[dict[str, Any]] = []
+        manifest_path = out_dir / "图纸清单.json"
+        layout_notes: list[str] = []
+        if manifest_path.is_file():
+            manifest = read_json(manifest_path)
+            figures = manifest.get("figures") or []
+            layout_notes = collect_layout_notes(manifest)
+        records = write_design_doc(out_path, analysis, args.software_name, args.version, business, figures, layout_notes)
+        print(f"OK technical design draft: {out_path}")
+        print(f"OK technical design self-review: {out_dir / '技术方案文档自检记录.md'}")
+        for record in records:
+            print(f"Review round {record['round']}: {record['action']} issues={len(record['issues'])}")
+        if records[-1]["issues"]:
+            print("STOP_FOR_USER")
+            print(
+                "NEXT_ACTION: 技术方案文档自检仍有问题。请回到业务理解阶段补全 design_spec 中的真实模块、功能、接口和出错处理设计后再重新生成。"
+            )
+            raise SystemExit(1)
+        print("STOP_FOR_USER")
+        print(
+            "NEXT_ACTION: 请一次性确认完整技术方案文档草稿是否与真实设计一致；必要时先统一修改段落内容，再运行 confirm_stage.py --stage markdown。"
+        )
+        return
+
     out_path = out_dir / "操作手册.md"
     records = write_manual(out_path, analysis, args.software_name, args.version, business)
     print(f"OK manual draft: {out_path}")

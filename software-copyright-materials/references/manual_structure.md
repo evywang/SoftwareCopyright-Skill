@@ -1,5 +1,7 @@
 # 操作手册结构
 
+> 本骨架用于 `manual_kind=operation`（有用户界面的软件）。无用户界面的软件（嵌入式固件、驱动、库、后端服务等）不生成操作手册，改按 [technical_design_structure.md](technical_design_structure.md) 生成技术方案文档。
+
 操作手册应像真实软件随附的操作说明，目标是让读者知道软件用途、功能和基本操作。
 
 推荐采用软著审核友好的通用骨架，类似传统操作手册：

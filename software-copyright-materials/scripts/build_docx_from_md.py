@@ -15,8 +15,10 @@ from common import (
     CODE_FONT_NAME,
     CODE_FONT_SIZE,
     CODE_LINE_SPACING,
+    PROSE_DOC_FILES,
     confirmation_is_current,
     draft_completeness_issues,
+    draft_manual_kind,
     draft_snapshot,
     ensure_dir,
     file_sha256,
@@ -92,11 +94,14 @@ def confirmation_issues(workdir: Path) -> list[str]:
         issues.append("代码文件选择尚未确认：请确认 草稿/代码文件选择.json 后记录 `code-selection` 门禁")
     elif not confirmation_is_current(selection):
         issues.append("代码文件选择在确认后已被修改：请重新记录 `code-selection` 门禁")
-    screenshot = read_json_if_exists(workdir / "截图方式确认.json")
-    if not screenshot.get("screenshot_method_confirmed"):
-        issues.append("截图方式尚未确认：请选择截图方式后记录 `screenshot-method` 门禁")
-    elif screenshot.get("screenshot_method") not in {"playwright-cli", "user-supplied", "skip"}:
-        issues.append("截图方式已失效：请重新选择 Playwright CLI 自动截图、用户自行截图或跳过截图")
+    if draft_manual_kind(draft_dir) == "operation":
+        screenshot = read_json_if_exists(workdir / "截图方式确认.json")
+        if not screenshot.get("screenshot_method_confirmed"):
+            issues.append("截图方式尚未确认：请选择截图方式后记录 `screenshot-method` 门禁")
+        elif screenshot.get("screenshot_method") not in {"playwright-cli", "user-supplied", "skip"}:
+            issues.append("截图方式已失效：请重新选择 Playwright CLI 自动截图、用户自行截图或跳过截图")
+    elif (workdir / "截图方式确认.json").exists():
+        issues.append("技术方案文档（无界面软件）不需要选择截图方式；请删除 截图方式确认.json 或改回操作手册模式")
     app_md = draft_dir / "申请表信息.md"
     if app_md.exists():
         _, warnings = parse_application_lines(app_md)
@@ -424,7 +429,7 @@ def manual_format_commands(children: list[dict[str, Any]], images: list[dict[str
             props.update({"font": "SimHei", "font.ea": "SimHei", "keepNext": "true"})
         elif fmt.get("listStyle"):
             props.update({"size": "10.5pt", "align": "left"})
-        elif text.startswith("【截图") or text.startswith("【远程图片"):
+        elif text.startswith("【截图") or text.startswith("【远程图片") or text.startswith("【图预留"):
             props.update({"size": "10.5pt", "align": "center"})
         else:
             props.update({"size": "10.5pt", "align": "justify", "firstLineChars": "200"})
@@ -549,23 +554,25 @@ def build_all(workdir: Path, software_name: str, version: str, skip_preview: boo
     screenshot_manifest = workdir / "截图/截图清单.json"
     screenshot_paths: list[Path | None] = []
     manual_screenshot_note = ""
-    if screenshot_method == "skip":
-        warnings.append("用户选择暂不截图；操作手册已保留截图预留位置")
-    elif screenshot_method:
-        if not screenshot_manifest.exists():
-            warnings.append("操作手册截图未生成或未插入；操作手册应保留截图预留位置")
-        else:
-            manifest_method = read_json_if_exists(screenshot_manifest).get("method")
-            if manifest_method != screenshot_method:
-                warnings.append(
-                    f"截图清单方式 {manifest_method or '未记录'} 与当前确认方式 {screenshot_method} 不一致；"
-                    "未沿用旧截图，操作手册应保留截图预留位置"
-                )
+    doc_kind = draft_manual_kind(draft_dir)
+    if doc_kind == "operation":
+        if screenshot_method == "skip":
+            warnings.append("用户选择暂不截图；操作手册已保留截图预留位置")
+        elif screenshot_method:
+            if not screenshot_manifest.exists():
+                warnings.append("操作手册截图未生成或未插入；操作手册应保留截图预留位置")
             else:
-                screenshot_paths, screenshot_warnings = screenshot_paths_from_manifest(screenshot_manifest, workdir)
-                warnings.extend(screenshot_warnings)
-                if not any(screenshot_paths):
-                    warnings.append("操作手册截图清单为空或没有可用图片；操作手册应保留截图预留位置")
+                manifest_method = read_json_if_exists(screenshot_manifest).get("method")
+                if manifest_method != screenshot_method:
+                    warnings.append(
+                        f"截图清单方式 {manifest_method or '未记录'} 与当前确认方式 {screenshot_method} 不一致；"
+                        "未沿用旧截图，操作手册应保留截图预留位置"
+                    )
+                else:
+                    screenshot_paths, screenshot_warnings = screenshot_paths_from_manifest(screenshot_manifest, workdir)
+                    warnings.extend(screenshot_warnings)
+                    if not any(screenshot_paths):
+                        warnings.append("操作手册截图清单为空或没有可用图片；操作手册应保留截图预留位置")
     app_txt, app_warnings = write_application_txt(draft_dir, final_dir)
     if app_txt:
         outputs.append(app_txt)
@@ -587,44 +594,48 @@ def build_all(workdir: Path, software_name: str, version: str, skip_preview: boo
         out_path = final_dir / code_spec_map[md_name]
         estimated_pages[out_path] = build_code_docx(cli, md_path, out_path, final_software_name, final_version)
         outputs.append(out_path)
-    manual_md = draft_dir / "操作手册.md"
-    if manual_md.exists():
-        manual_out = final_dir / f"{safe_name}_操作手册.docx"
-        manual_source = manual_md
-        renamed_manual: Path | None = None
+    prose_md_name, _review_md, _review_json, prose_docx_suffix = PROSE_DOC_FILES[doc_kind]
+    stale_prose_docx = PROSE_DOC_FILES["design" if doc_kind == "operation" else "operation"][3]
+    (final_dir / f"{safe_name}{stale_prose_docx}").unlink(missing_ok=True)
+    prose_md = draft_dir / prose_md_name
+    if prose_md.exists():
+        prose_out = final_dir / f"{safe_name}{prose_docx_suffix}"
+        prose_source = prose_md
+        renamed_prose: Path | None = None
         if app_name and app_name != software_name:
             with tempfile.NamedTemporaryFile(
                 "w", suffix=".md", prefix=".officecli-renamed-", dir=draft_dir,
                 delete=False, encoding="utf-8"
             ) as handle:
-                handle.write(manual_md.read_text(encoding="utf-8").replace(software_name, app_name))
-                renamed_manual = Path(handle.name)
-            manual_source = renamed_manual
+                handle.write(prose_md.read_text(encoding="utf-8").replace(software_name, app_name))
+                renamed_prose = Path(handle.name)
+            prose_source = renamed_prose
         try:
-            manual_result = build_manual_docx(
+            prose_result = build_manual_docx(
                 cli,
-                manual_source,
-                manual_out,
+                prose_source,
+                prose_out,
                 draft_dir,
                 final_software_name,
                 final_version,
-                screenshot_paths,
+                screenshot_paths if doc_kind == "operation" else None,
             )
-            inserted = manual_result["manifest_images"]
-            remaining = manual_result["remaining_placeholders"]
-            unused = manual_result["unused_manifest_images"]
-            if inserted:
-                manual_screenshot_note = f"- `{manual_out.name}`：已通过 OfficeCLI 插入 {inserted} 张操作截图。"
-            if remaining:
-                warnings.append(f"操作手册仍有 {remaining} 个截图预留位置未匹配到图片")
-            if unused:
-                warnings.append(f"截图清单有 {unused} 张图片未匹配到操作手册截图预留位置")
+            inserted = prose_result["manifest_images"]
+            remaining = prose_result["remaining_placeholders"]
+            unused = prose_result["unused_manifest_images"]
+            if doc_kind == "operation":
+                if inserted:
+                    manual_screenshot_note = f"- `{prose_out.name}`：已通过 OfficeCLI 插入 {inserted} 张操作截图。"
+                if remaining:
+                    warnings.append(f"操作手册仍有 {remaining} 个截图预留位置未匹配到图片")
+                if unused:
+                    warnings.append(f"截图清单有 {unused} 张图片未匹配到操作手册截图预留位置")
         finally:
-            if renamed_manual:
-                renamed_manual.unlink(missing_ok=True)
-        outputs.append(manual_out)
+            if renamed_prose:
+                renamed_prose.unlink(missing_ok=True)
+        outputs.append(prose_out)
     else:
-        warnings.append("缺少草稿/操作手册.md")
+        warnings.append(f"缺少草稿/{prose_md_name}")
     docx_outputs = [path for path in outputs if path.suffix.lower() == ".docx"]
     notes = docx_checks(
         cli, docx_outputs, estimated_pages, final_dir / "预览", render_preview=not skip_preview)

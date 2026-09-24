@@ -17,9 +17,15 @@ Windows PowerShell 使用官方安装命令：
 irm https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.ps1 | iex
 ```
 
-官方脚本默认安装到 `%LOCALAPPDATA%\OfficeCLI` 并写入用户 PATH。安装完成后，必须重启 Codex，让新进程读取更新后的 PATH；重启后运行 `officecli --version` 和环境检查，再继续工作流。不得要求用户设置 `OFFICECLI_PATH`，不得通过 `--officecli` 指定项目内或任意文件夹中的可执行文件。
+macOS / Linux 使用官方安装命令：
 
-运行时只从当前进程 PATH 查找全局 `officecli` / `officecli.exe`。如果 Windows 官方安装目录中已有二进制、但当前进程 PATH 尚未识别，环境检查必须报告“需要重启 Codex”并停止，不得把该文件当作项目便携版直接绕过重启。
+```bash
+curl -fsSL https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh | bash
+```
+
+官方脚本默认安装到用户级全局命令目录并写入用户 PATH（Windows 为 `%LOCALAPPDATA%\OfficeCLI`）。安装完成后，必须重启 coding agent，让新进程读取更新后的 PATH；重启后运行 `officecli --version` 和环境检查，再继续工作流。不得要求用户设置 `OFFICECLI_PATH`，不得通过 `--officecli` 指定项目内或任意文件夹中的可执行文件。
+
+运行时只从当前进程 PATH 查找全局 `officecli` / `officecli.exe`。如果 Windows 官方安装目录中已有二进制、但当前进程 PATH 尚未识别，环境检查必须报告“需要重启 coding agent”并停止，不得把该文件当作项目便携版直接绕过重启。
 
 版本缺失或不等于 `1.0.151` 时，环境检查必须停止。只有用户明确接受兼容性风险后，正式生成才允许传入 `--allow-untested-officecli`。
 

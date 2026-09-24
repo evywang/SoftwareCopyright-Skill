@@ -229,7 +229,7 @@ def check_environment_gate(out: Path) -> None:
     if not confirmed:
         raise SystemExit(
             "STOP_FOR_USER\n"
-            "NEXT_ACTION: OfficeCLI 环境尚未就绪或未确认。请按环境检查提示全局安装，重启 Codex 后继续；"
+            "NEXT_ACTION: OfficeCLI 环境尚未就绪或未确认。请按环境检查提示全局安装，重启 coding agent 后继续；"
             "如果用户明确选择使用未经验证的版本，记录其选择后再运行 "
             "`python3 <SKILL_DIR>/scripts/confirm_stage.py --workdir 软件著作权申请资料 --stage environment --note \"<用户选择>\"`。"
         )

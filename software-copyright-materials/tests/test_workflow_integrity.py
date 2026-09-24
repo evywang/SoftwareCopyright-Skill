@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 import unittest
@@ -23,6 +24,7 @@ from confirm_stage import (
     parse_screenshot_method,
 )  # noqa: E402
 from generate_application_info import submitted_code_page_count, total_source_line_count  # noqa: E402
+import officecli_backend  # noqa: E402
 
 
 class WorkflowIntegrityTests(unittest.TestCase):
@@ -39,7 +41,7 @@ class WorkflowIntegrityTests(unittest.TestCase):
 
         self.assertEqual(total_source_line_count(analysis, manifest), 980)
 
-    def test_officecli_install_waits_for_codex_restart_when_path_is_stale(self) -> None:
+    def test_officecli_install_waits_for_agent_restart_when_path_is_stale(self) -> None:
         installed = self.temp_dir / "OfficeCLI" / "officecli.exe"
         with (
             patch("check_environment.resolve_officecli", return_value=None),
@@ -49,8 +51,26 @@ class WorkflowIntegrityTests(unittest.TestCase):
 
         self.assertEqual(result["officecli_install_state"], "restart_required")
         self.assertTrue(result["requires_user_input"])
-        self.assertIn("重启 Codex", result["next_action"])
+        self.assertIn("重启 coding agent", result["next_action"])
         self.assertNotIn("OFFICECLI_PATH", result["next_action"])
+
+    def test_officecli_install_command_matches_platform(self) -> None:
+        with patch.object(officecli_backend.os, "name", "nt"):
+            self.assertIn("install.ps1", officecli_backend.officecli_install_command())
+        with patch.object(officecli_backend.os, "name", "posix"):
+            self.assertIn("install.sh", officecli_backend.officecli_install_command())
+
+    def test_missing_officecli_reports_platform_install_command(self) -> None:
+        with (
+            patch("check_environment.resolve_officecli", return_value=None),
+            patch("check_environment.pending_windows_officecli_install", return_value=None),
+            patch("check_environment.officecli_install_command", return_value="cmd-for-platform"),
+        ):
+            result = check_environment()
+
+        self.assertEqual(result["officecli_install_state"], "not_installed")
+        self.assertIn("cmd-for-platform", result["next_action"])
+        self.assertIn("cmd-for-platform", result["install_prompt"])
 
     def test_playwright_cli_global_candidates_are_platform_standard(self) -> None:
         prefix = Path("global-prefix")
@@ -63,8 +83,12 @@ class WorkflowIntegrityTests(unittest.TestCase):
     def test_playwright_cli_uses_global_prefix_without_restart(self) -> None:
         prefix = self.temp_dir / "global-prefix"
         prefix.mkdir()
-        executable = prefix / "playwright-cli.cmd"
-        executable.write_text("@echo off", encoding="utf-8")
+        if os.name == "nt":
+            executable = prefix / "playwright-cli.cmd"
+        else:
+            executable = prefix / "bin" / "playwright-cli"
+            executable.parent.mkdir()
+        executable.write_text("", encoding="utf-8")
         with (
             patch.object(playwright_check.shutil, "which", return_value=None),
             patch.object(playwright_check, "_npm_global_prefix", return_value=(prefix, "")),
