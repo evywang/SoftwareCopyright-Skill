@@ -354,14 +354,14 @@ metadata:
 
 `manual_kind=design`（无界面软件）时，脚本生成 `草稿/技术方案文档.md` 和 `草稿/技术方案文档自检记录.md/json`，骨架和写作规则见 [technical_design_structure.md](references/technical_design_structure.md)：固定“一、引言 / 二、软件总体设计 / 三、软件功能描述 / 四、接口设计”章节，模块信息表和接口参数表必须来自真实项目设计；正文不得出现页面、按钮、点击等界面词汇，自检发现界面词汇或结构缺失时必须回到 `design_spec` 修正；架构图、流程图、序列图使用可见的【图预留】文字占位，不运行截图阶段。
 
-`manual_kind=design` 且模型在 `design_spec.figures` 中声明了 DOT 图源时，先生成图纸再生成文档：
+`manual_kind=design` 且模型在 `design_spec.figures` 中声明了 DOT 图源、或在 `design_spec.sequences` 中声明了 Archify 序列图时，先渲染图纸和序列图再生成文档：
 
 ```bash
 <PYTHON> "<SKILL_DIR>/scripts/render_design_figures.py" \
   --workdir 软件著作权申请资料
 ```
 
-脚本按系统探测到的可用后端把 DOT 源渲染成 PNG 到 `软件著作权申请资料/草稿/图纸/` 并生成 `图纸清单.json`（优先使用 `环境检查.json` 记录的后端，否则现场探测）；渲染链为 `dot -Tpng` → `dot -Tsvg` + cairosvg / inkscape / librsvg / imagemagick 任一可用转换器，逐张图按顺序尝试直到成功。渲染前自动注入版式默认值（方向、间距、正交连线、系统中文字体、统一节点样式，带边标签的图自动改折线边、cluster 标题靠左），渲染前 lint 拦截超长未换行标签，渲染后校验宽高比；布局提示写入 `图纸清单.json` 和技术方案文档自检记录。agent 具备读图能力时，应在用户确认前逐张查看渲染结果，发现重叠、错位或比例失衡时修正 DOT 图源并重跑渲染。随后运行 `generate_manual_draft.py` 时按清单把图片嵌入正文（与操作手册截图共用 OfficeCLI 图片插入管线）。所有后端都不可用或渲染失败时不伪造成功：正文保留【图预留】占位并在自检中提示，用户可安装 graphviz 后重跑或从 `design_spec.figures` 删除该图。
+DOT 图渲染链为 `dot -Tpng` → `dot -Tsvg` + cairosvg / inkscape / librsvg / imagemagick。序列图（`design_spec.sequences`）通过 Archify CLI 交付为自包含 HTML 后，由系统无头浏览器（Chrome/Chromium）截图为 PNG——Archify 未安装时序列图保留【图预留】占位，不影响其他章节。agent 具备读图能力时，应在用户确认前逐张查看渲染结果。所有后端都不可用或渲染失败时不伪造成功：正文保留【图预留】占位并在自检中提示。
 
 `manual_kind=operation` 时，脚本生成 `草稿/操作手册.md`。操作手册草稿不得照抄用户提供的范本文案或旧项目内容，但应吸收其结构特点：先写相关文档、说明、功能特点和系统要求，再按真实页面或核心流程逐章说明操作，最后写常见问题解答和术语表。一级章节标题使用中文大写序号；相关文档章节必须是表格；功能特点和页面操作章节必须以段落展开，不用项目符号和编号列表堆信息。必须基于模型写入 `草稿/业务理解.json` 的 `manual_modules` 组织章节；`manual_sections` 只用于补充说明性段落，不应用来反复插入同一批功能模块。各功能章节必须写清页面用途、进入位置、用户看到的控件和数据、实际操作、输入限制或异常提示、操作结果和截图预留。语言要面向普通用户，说明“这个页面是干嘛的、用户怎么进入、用户点什么/填什么、操作后看到什么”，不要写代码实现、框架名称、接口封装、状态管理、异步队列等技术细节。撰写时由 agent 自行检查章节是否完整、内容是否过薄、语言是否过于技术化，并在草稿内部完成必要补写；完整草稿完成后只让用户做一次整体确认，确认前不得进入正式 Word/TXT 生成。
 

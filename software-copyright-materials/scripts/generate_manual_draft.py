@@ -618,7 +618,7 @@ DESIGN_REQUIRED_HEADINGS = (
     "## 四、接口设计",
     "### 4.1 软件界面",
     "### 4.2 API接口",
-    "### 4.3 出错处理设计",
+    "### 4.4 出错处理设计",
 )
 
 
@@ -674,12 +674,27 @@ def figure_markup(
     return default_placeholder
 
 
+def rendered_sequence(sequences: list[dict[str, Any]] | None, sequence_id: str) -> dict[str, Any] | None:
+    for sequence in sequences or []:
+        if isinstance(sequence, dict) and sequence.get("key") == sequence_id and sequence.get("status") == "ok":
+            return sequence
+    return None
+
+
+def sequence_markup(sequences: list[dict[str, Any]] | None, sequence_id: str, title: str) -> str:
+    rendered = rendered_sequence(sequences, sequence_id)
+    if rendered:
+        return f"![{title}]({rendered['path']})"
+    return f"【图预留：请在此处插入“{title}”时序图。】"
+
+
 def render_design_doc(
     software_name: str,
     version: str,
     business: dict[str, Any],
     spec: dict[str, Any],
     figures: list[dict[str, Any]] | None = None,
+    sequences: list[dict[str, Any]] | None = None,
 ) -> str:
     positioning = plain_manual_text(business.get("product_positioning") or "")
     if positioning and not positioning.endswith("。"):
@@ -781,10 +796,18 @@ def render_design_doc(
                     )
             else:
                 lines.append("无。")
-            lines.append("")
-            lines.extend(["**返回结果**", "", returns or "无。", ""])
+                lines.append("")
+                lines.extend(["**返回结果**", "", returns or "无。", ""])
 
-    lines.extend(["### 4.3 出错处理设计", ""])
+    if spec.get("sequences"):
+        lines.extend(["### 4.3 时序图", ""])
+        for index, item in enumerate(spec["sequences"], start=1):
+            sequence_id = str(item.get("id") or "").strip()
+            title = str(item.get("title") or "").strip()
+            lines.extend([f"#### 4.3.{index} {title}", ""])
+            lines.extend([sequence_markup(sequences, sequence_id, title), ""])
+
+    lines.extend(["### 4.4 出错处理设计", ""])
     for index, item in enumerate(spec.get("error_handling") or [], start=1):
         title = str(item.get("title") or "").strip()
         description = str(item.get("description") or "").strip()
@@ -802,8 +825,25 @@ def render_design_doc(
     return "\n".join(lines)
 
 
+def append_sequence_quality_issues(issues: list[str], text: str, spec: dict[str, Any], sequences: list[dict[str, Any]] | None) -> None:
+    declared_ids = [str(item.get("id") or "").strip() for item in (spec.get("sequences") or []) if str(item.get("id") or "").strip()]
+    if not declared_ids:
+        return
+    rendered_ids = {
+        str(sequence.get("key") or "")
+        for sequence in sequences or []
+        if isinstance(sequence, dict) and sequence.get("status") == "ok"
+    }
+    missing = [sequence_id for sequence_id in declared_ids if sequence_id not in rendered_ids]
+    if missing:
+        issues.append("声明了序列图但未渲染成功：" + "、".join(missing) + "；正文保留【图预留】占位")
+    if declared_ids and "4.3 时序图" not in text and "【图预留" not in text:
+        issues.append("缺少序列图章节（4.3 时序图）")
+
+
 def design_quality_issues(
-    text: str, spec: dict[str, Any], figures: list[dict[str, Any]] | None = None
+    text: str, spec: dict[str, Any], figures: list[dict[str, Any]] | None = None,
+    sequences: list[dict[str, Any]] | None = None,
 ) -> list[str]:
     issues: list[str] = []
     for heading in DESIGN_REQUIRED_HEADINGS:
@@ -826,8 +866,8 @@ def design_quality_issues(
             if isinstance(figure, dict) and figure.get("status") == "ok"
         }
         missing = [key for key in declared_figure_keys if key not in rendered_keys]
-        if missing:
-            issues.append("声明了图纸但未渲染成功：" + "、".join(missing) + "；正文保留【图预留】占位")
+        if text.count("【图预留") < len(missing):
+            issues.append("声明的架构图/流程图缺少可见的【图预留】占位说明")
     declared_slots = [("architecture", "结构框架图")]
     for index, item in enumerate(spec.get("key_designs") or [], start=1):
         if str(item.get("figure") or "").strip():
@@ -848,6 +888,7 @@ def design_quality_issues(
             signature = str(iface.get("signature") or "").strip()
             if signature and signature not in text:
                 issues.append(f"接口设计缺少接口签名：{interface_short_name(signature)}")
+    append_sequence_quality_issues(issues, text, spec, sequences)
     for leftover in ("待用户确认", "按项目实际填写"):
         if leftover in text:
             issues.append(f"正文残留占位文字：{leftover}")
@@ -861,26 +902,27 @@ def build_design_text(
     business: dict[str, Any],
     spec: dict[str, Any],
     figures: list[dict[str, Any]] | None = None,
+    sequences: list[dict[str, Any]] | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
-    text = render_design_doc(software_name, version, business, spec, figures)
+    text = render_design_doc(software_name, version, business, spec, figures, sequences)
     records = [
-        {"round": 1, "action": "初稿生成", "issues": design_quality_issues(text, spec, figures)},
-        {"round": 2, "action": "设计要素复核", "issues": design_quality_issues(text, spec, figures)},
-        {"round": 3, "action": "界面词汇与结构复核", "issues": design_quality_issues(text, spec, figures)},
+        {"round": 1, "action": "初稿生成", "issues": design_quality_issues(text, spec, figures, sequences)},
+        {"round": 2, "action": "设计要素复核", "issues": design_quality_issues(text, spec, figures, sequences)},
+        {"round": 3, "action": "界面词汇与结构复核", "issues": design_quality_issues(text, spec, figures, sequences)},
     ]
     if records[-1]["issues"]:
         records.append(
             {
                 "round": 4,
                 "action": "复核仍需模型回到业务理解补写",
-                "issues": design_quality_issues(text, spec, figures),
+                "issues": design_quality_issues(text, spec, figures, sequences),
             }
         )
     return text, records
 
 
 def collect_layout_notes(manifest: dict[str, Any]) -> list[str]:
-    """Collect advisory layout notes from the figure manifest for the self-check record."""
+    """Collect advisory layout notes from the figure/sequence manifest for the self-check record."""
     notes: list[str] = []
     for figure in manifest.get("figures") or []:
         if figure.get("status") != "ok":
@@ -889,6 +931,11 @@ def collect_layout_notes(manifest: dict[str, Any]) -> list[str]:
             notes.append(f"{figure['key']}：{issue}")
         for issue in figure.get("layout") or []:
             notes.append(f"{figure['key']}：{issue}")
+    for sequence in manifest.get("sequences") or []:
+        if sequence.get("status") != "ok":
+            notes.append(f"序列图 {sequence.get('key')} 渲染失败：{sequence.get('error')}")
+        for issue in sequence.get("layout") or []:
+            notes.append(f"序列图 {sequence.get('key')}：{issue}")
     return notes
 
 
@@ -937,10 +984,11 @@ def write_design_doc(
     version: str,
     business: dict[str, Any],
     figures: list[dict[str, Any]] | None = None,
+    sequences: list[dict[str, Any]] | None = None,
     layout_notes: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     spec = normalize_design_spec_from_business(business)
-    text, records = build_design_text(analysis, software_name, version, business, spec, figures)
+    text, records = build_design_text(analysis, software_name, version, business, spec, figures, sequences)
     path.write_text(text, encoding="utf-8")
     write_design_review_records(path.parent, records, spec, figures, layout_notes)
     return records
@@ -1138,13 +1186,15 @@ def main() -> None:
     if doc_kind == "design":
         out_path = out_dir / "技术方案文档.md"
         figures: list[dict[str, Any]] = []
+        sequences: list[dict[str, Any]] = []
         manifest_path = out_dir / "图纸清单.json"
         layout_notes: list[str] = []
         if manifest_path.is_file():
             manifest = read_json(manifest_path)
             figures = manifest.get("figures") or []
+            sequences = manifest.get("sequences") or []
             layout_notes = collect_layout_notes(manifest)
-        records = write_design_doc(out_path, analysis, args.software_name, args.version, business, figures, layout_notes)
+        records = write_design_doc(out_path, analysis, args.software_name, args.version, business, figures, sequences, layout_notes)
         print(f"OK technical design draft: {out_path}")
         print(f"OK technical design self-review: {out_dir / '技术方案文档自检记录.md'}")
         for record in records:

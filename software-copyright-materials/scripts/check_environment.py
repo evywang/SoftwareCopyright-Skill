@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from common import (
+    detect_archify,
     detect_diagram_backends,
     ensure_dir,
     write_json,
@@ -40,6 +41,7 @@ def check_environment() -> dict[str, Any]:
     tested_version = officecli_available and version == TESTED_OFFICECLI_VERSION
     requires_user_input = not tested_version
     diagram = detect_diagram_backends()
+    archify = detect_archify()
     if pending_install:
         next_action = (
             "OfficeCLI 已安装到官方全局目录，但当前 coding agent 进程尚未获取更新后的 PATH。"
@@ -73,6 +75,8 @@ def check_environment() -> dict[str, Any]:
             "diagram_backend": diagram["backend"],
             "diagram_backends": diagram["backends"],
             "diagram_detail": diagram["detail"],
+            "archify": bool(archify),
+            "archify_path": archify or "",
         },
         "versions": {
             "python": platform.python_version(),
@@ -123,6 +127,7 @@ def write_markdown(path: Path, data: dict[str, Any]) -> None:
         f"- OpenXML 结构校验：{'可用' if caps['docx_openxml_validate'] else '不可用'}",
         f"- DOCX 预览：{'可用' if caps['docx_preview'] else '不可用'}",
         f"- 图纸渲染（技术方案文档 DOT 图）：{'可用（' + data['capabilities']['diagram_backend'] + '）' if caps['diagram_render'] else '不可用'}（{data['capabilities']['diagram_detail']}）",
+        f"- Archify 序列图：{'可用' if caps['archify'] else '未安装（序列图将保留【图预留】占位）'}",
         f"- Word 原生页数校验：{'可能可用' if caps['native_word_page_count_possible'] else '需在 Word/WPS 中人工复核'}",
         "",
         "## 建议",

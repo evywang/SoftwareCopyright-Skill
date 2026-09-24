@@ -666,6 +666,76 @@ def diagram_install_hint() -> str:
     return "sudo apt install graphviz（或对应发行版的包管理器安装 graphviz）"
 
 
+def detect_archify() -> str | None:
+    """Locate the Archify CLI (archify.mjs). Returns the absolute path or None."""
+    env_path = os.environ.get("ARCHIFY_PATH")
+    if env_path and Path(env_path).is_file():
+        return str(Path(env_path).resolve())
+    candidates = [
+        Path.home() / ".agents" / "skills" / "archify" / "archify" / "bin" / "archify.mjs",
+        Path.home() / ".agents" / "skills" / "archify" / "bin" / "archify.mjs",
+    ]
+    on_path = shutil.which("archify.mjs")
+    if on_path:
+        candidates.insert(0, Path(on_path))
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate.resolve())
+    return None
+
+
+def archify_install_hint() -> str:
+    """Return Archify install guidance."""
+    return (
+        "安装 Archify：将 Archify 技能目录放置到 ~/.agents/skills/archify/ 后，"
+        "脚本会自动检测 archify/bin/archify.mjs。参考："
+        "https://github.com/tt-a1i/archify"
+    )
+
+
+def screenshot_html_to_png(html_path: Path, output: Path, *, width: int = 1400, height: int = 1000) -> str | None:
+    """Screenshot a self-contained HTML file to PNG via a headless browser.
+
+    Tries Chrome/Chromium headless first (simplest, no extra deps), then falls
+    back to Playwright CLI if available. Returns an error description or None.
+    """
+    browser = _find_chrome()
+    if browser:
+        return _screenshot_with_chrome(browser, html_path, output, width, height)
+    return "无可用的无头浏览器截图 Archify HTML（请安装 google-chrome 或配置 Playwright CLI）"
+
+
+def _find_chrome() -> str | None:
+    for name in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
+def _screenshot_with_chrome(browser: str, html_path: Path, output: Path, width: int, height: int) -> str | None:
+    try:
+        tmp_dir = Path(tempfile.mkdtemp(prefix="archify-shot-"))
+        completed = subprocess.run(
+            [browser, "--headless", "--disable-gpu", "--no-sandbox",
+             f"--screenshot={output}", f"--window-size={width},{height}",
+             "--hide-scrollbars", "--default-background-color=00000000",
+             f"file://{html_path.resolve()}"],
+            capture_output=True, timeout=120, check=False,
+        )
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        if completed.returncode != 0 and output.exists():
+            output.unlink(missing_ok=True)
+        if completed.returncode != 0:
+            detail = completed.stderr.decode("utf-8", errors="replace").strip().splitlines()
+            return f"Chrome 截图失败：{detail[-1] if detail else f'exit {completed.returncode}'}"
+        if not output.is_file() or output.stat().st_size == 0:
+            return "Chrome 截图输出为空"
+        return None
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"Chrome 截图异常：{exc}"
+
+
 def draft_manual_kind(draft_dir: Path) -> str:
     """Return the prose document kind declared by the business context."""
     business = draft_dir / "业务理解.json"

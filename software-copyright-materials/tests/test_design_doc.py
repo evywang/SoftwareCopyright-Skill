@@ -222,7 +222,12 @@ class DesignFigureTests(unittest.TestCase):
         text = render_design_doc("SmartHub网关软件", "V1.0", context, context["design_spec"])
 
         issues = design_quality_issues(text, context["design_spec"], [])
-        self.assertTrue(any("图纸" in issue for issue in issues))
+        self.assertFalse(any("缺少可见的【图预留】" in issue for issue in issues))
+        self.assertIn("【图预留：请在此处插入“软件整体结构框架图”。】", text)
+
+        text_without_placeholder = text.replace("【图预留：请在此处插入“软件整体结构框架图”。】", "")
+        issues = design_quality_issues(text_without_placeholder, context["design_spec"], [])
+        self.assertTrue(any("缺少可见的【图预留】" in issue for issue in issues))
 
     def test_render_design_figures_produces_png_and_manifest(self) -> None:
         if not shutil.which("dot"):
@@ -243,9 +248,9 @@ class DesignFigureTests(unittest.TestCase):
             self.assertEqual(len(manifest["figures"]), 1)
             self.assertEqual(manifest["figures"][0]["status"], "ok")
             self.assertTrue((draft_dir / manifest["figures"][0]["path"]).is_file())
-            self.assertEqual(
-                json.loads((draft_dir / "图纸清单.json").read_text(encoding="utf-8"))["method"], "dot"
-            )
+            manifest_data = json.loads((draft_dir / "图纸清单.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest_data["dot"]["method"], "dot")
+            self.assertEqual(manifest_data["figures"][0]["status"], "ok")
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
 
