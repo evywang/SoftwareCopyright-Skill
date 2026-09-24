@@ -501,11 +501,9 @@ def docx_checks(cli: OfficeCli, outputs: list[Path], estimated_pages: dict[Path,
                     f"- `{output.name}`：当前环境无法取得 Word 原生页数；草稿按 {estimated} 页估算，"
                     "提交前需在 Word/WPS 中复核自动分页结果。"
                 )
-            elif int(pages) != estimated and estimated == 30 and any(
-                marker in output.name for marker in ("(前30页)", "(后30页)")
-            ):
+            elif int(pages) != estimated and estimated == 60 and "-代码" in output.name:
                 raise OfficeCliError(
-                    f"{output.name} 经 Word 自动分页后为 {pages} 页，不是要求的 30 页。"
+                    f"{output.name} 经 Word 自动分页后为 {pages} 页，不是要求的前30页+后30页共 60 页。"
                     "请根据生成报告重新校准代码选材量后再生成，不能把页数不符的文档作为正式资料。"
                 )
             elif int(pages) != estimated:
@@ -578,10 +576,15 @@ def build_all(workdir: Path, software_name: str, version: str, skip_preview: boo
         outputs.append(app_txt)
     warnings.extend(app_warnings)
     code_spec_map = {
-        "代码-前30页.md": f"{safe_name}-代码(前30页).docx",
-        "代码-后30页.md": f"{safe_name}-代码(后30页).docx",
-        "代码-全部.md": f"{safe_name}-代码(全部).docx",
+        "代码.md": f"{safe_name}-代码.docx",
     }
+    stale_code_docx = [
+        f"{safe_name}-代码(前30页).docx",
+        f"{safe_name}-代码(后30页).docx",
+        f"{safe_name}-代码(全部).docx",
+    ]
+    for stale_name in stale_code_docx:
+        (final_dir / stale_name).unlink(missing_ok=True)
     code_manifest = read_json_if_exists(draft_dir / "代码提取清单.json")
     declared_code_drafts = [
         str(name) for name in code_manifest.get("outputs", []) if str(name) in code_spec_map

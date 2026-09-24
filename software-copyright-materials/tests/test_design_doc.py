@@ -11,6 +11,7 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from build_docx_from_md import manual_format_commands  # noqa: E402
+import common  # noqa: E402
 from common import PROSE_DOC_FILES, draft_completeness_issues, draft_manual_kind  # noqa: E402
 from generate_business_context import normalize_model_context  # noqa: E402
 from generate_manual_draft import design_quality_issues, render_design_doc  # noqa: E402
@@ -170,9 +171,9 @@ class DraftCompletenessDesignTests(unittest.TestCase):
         (self.draft_dir / "代码文件选择.json").write_text("{}", encoding="utf-8")
         (self.draft_dir / "代码提取清单.md").write_text("# 清单", encoding="utf-8")
         (self.draft_dir / "代码提取清单.json").write_text(
-            json.dumps({"outputs": ["代码-全部.md"]}, ensure_ascii=False), encoding="utf-8"
+            json.dumps({"outputs": ["代码.md"]}, ensure_ascii=False), encoding="utf-8"
         )
-        (self.draft_dir / "代码-全部.md").write_text("## 第 1 页", encoding="utf-8")
+        (self.draft_dir / "代码.md").write_text("## 第 1 页", encoding="utf-8")
         (self.draft_dir / "申请表信息.md").write_text("➤软件全称：SmartHub网关软件", encoding="utf-8")
         (self.draft_dir / "技术方案文档.md").write_text("# SmartHub网关软件技术方案文档", encoding="utf-8")
         (self.draft_dir / "技术方案文档自检记录.md").write_text("# 自检", encoding="utf-8")
@@ -213,6 +214,12 @@ class DraftCompletenessDesignTests(unittest.TestCase):
         self.assertEqual(PROSE_DOC_FILES["design"][0], "技术方案文档.md")
         self.assertEqual(PROSE_DOC_FILES["design"][3], "_技术方案文档.docx")
         self.assertEqual(PROSE_DOC_FILES["operation"][0], "操作手册.md")
+
+    def test_code_draft_is_single_unified_file(self) -> None:
+        self.assertEqual(common.KNOWN_CODE_DRAFTS, {"代码.md"})
+        self.assertIn("代码-前30页.md", common.STALE_CODE_DRAFTS)
+        self.assertIn("代码-后30页.md", common.STALE_CODE_DRAFTS)
+        self.assertIn("代码-全部.md", common.STALE_CODE_DRAFTS)
 
 
 class DesignFigureTests(unittest.TestCase):
