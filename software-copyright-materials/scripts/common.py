@@ -279,6 +279,11 @@ CONFIRMATION_METADATA_KEYS = {
 }
 
 KNOWN_CODE_DRAFTS = {
+    "代码.md",
+}
+
+# Legacy split-file names cleaned up when regenerating.
+STALE_CODE_DRAFTS = {
     "代码-前30页.md",
     "代码-后30页.md",
     "代码-全部.md",
@@ -787,7 +792,11 @@ def draft_completeness_issues(workdir: Path) -> list[str]:
     for name in sorted(declared & KNOWN_CODE_DRAFTS):
         if not (draft_dir / name).is_file():
             issues.append(f"缺少清单声明的 草稿/{name}")
-    stale = sorted(name for name in KNOWN_CODE_DRAFTS - declared if (draft_dir / name).exists())
+    stale = sorted(
+        name
+        for name in (KNOWN_CODE_DRAFTS | STALE_CODE_DRAFTS) - declared
+        if (draft_dir / name).exists()
+    )
     if stale:
         issues.append("存在与当前代码提取模式冲突的旧草稿：" + "、".join(stale))
     review_path = draft_dir / review_json

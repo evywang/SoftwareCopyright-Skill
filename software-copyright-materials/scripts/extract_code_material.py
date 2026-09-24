@@ -273,25 +273,21 @@ def extract(project: Path, out_dir: Path, software_name: str, version: str, line
             f"NEXT_ACTION: 当前已选代码只有 {total_pages} 页，但候选源码足够补齐到 {SPLIT_THRESHOLD_PAGES} 页。"
             "请在 草稿/代码文件选择.json 中继续选择补充文件，重新记录 code-selection 门禁后再抽取。"
         )
-    for stale_name in ("代码-前30页.md", "代码-后30页.md", "代码-全部.md"):
+    for stale_name in ("代码.md", "代码-前30页.md", "代码-后30页.md", "代码-全部.md"):
         (out_dir / stale_name).unlink(missing_ok=True)
     outputs: list[str] = []
 
+    code_path = out_dir / "代码.md"
     if total_pages >= SPLIT_THRESHOLD_PAGES:
         front = list(enumerate(pages[:30], start=1))
         back = [(31 + i, page) for i, page in enumerate(pages[-30:])]
-        front_path = out_dir / "代码-前30页.md"
-        back_path = out_dir / "代码-后30页.md"
-        write_pages_md(front_path, "代码材料（前30页）", software_name, version, front)
-        write_pages_md(back_path, "代码材料（后30页）", software_name, version, back)
-        outputs.extend([front_path.name, back_path.name])
+        write_pages_md(code_path, "代码材料（前30页+后30页）", software_name, version, front + back)
         mode = "front30_back30"
     else:
-        all_path = out_dir / "代码-全部.md"
         all_pages = list(enumerate(pages, start=1))
-        write_pages_md(all_path, "代码材料（全部）", software_name, version, all_pages)
-        outputs.append(all_path.name)
+        write_pages_md(code_path, "代码材料（全部）", software_name, version, all_pages)
         mode = "all_under_60_pages"
+    outputs.append(code_path.name)
     supplement_status = (
         "候选源码可达到前30页/后30页要求"
         if available_pages >= SPLIT_THRESHOLD_PAGES
