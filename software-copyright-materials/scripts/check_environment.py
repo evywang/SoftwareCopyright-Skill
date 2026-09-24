@@ -9,13 +9,17 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from common import ensure_dir, write_json
+from common import (
+    detect_diagram_backends,
+    ensure_dir,
+    write_json,
+)
 from officecli_backend import (
     OFFICECLI_DOWNLOAD_URL,
-    OFFICECLI_INSTALL_COMMAND,
     TESTED_OFFICECLI_VERSION,
     OfficeCli,
     OfficeCliError,
+    officecli_install_command,
     pending_windows_officecli_install,
     resolve_officecli,
 )
@@ -35,15 +39,16 @@ def check_environment() -> dict[str, Any]:
     officecli_available = resolved is not None and not error
     tested_version = officecli_available and version == TESTED_OFFICECLI_VERSION
     requires_user_input = not tested_version
+    diagram = detect_diagram_backends()
     if pending_install:
         next_action = (
-            "OfficeCLI 已安装到官方全局目录，但当前 Codex 进程尚未获取更新后的 PATH。"
-            "请重启 Codex，回到此项目后重新运行环境检查；不要在项目目录内复制 OfficeCLI。"
+            "OfficeCLI 已安装到官方全局目录，但当前 coding agent 进程尚未获取更新后的 PATH。"
+            "请重启 coding agent，回到此项目后重新运行环境检查；不要在项目目录内复制 OfficeCLI。"
         )
     elif not officecli_available:
         next_action = (
-            f"请在 PowerShell 中执行官方全局安装命令：{OFFICECLI_INSTALL_COMMAND}。"
-            "安装完成后重启 Codex，回到此项目再重新运行环境检查。"
+            f"请执行当前平台的官方全局安装命令：{officecli_install_command()}。"
+            "安装完成后重启 coding agent，回到此项目再重新运行环境检查。"
         )
     else:
         next_action = (
@@ -64,6 +69,10 @@ def check_environment() -> dict[str, Any]:
             "docx_openxml_validate": tested_version,
             "docx_preview": tested_version,
             "native_word_page_count_possible": platform.system() == "Windows",
+            "diagram_render": diagram["available"],
+            "diagram_backend": diagram["backend"],
+            "diagram_backends": diagram["backends"],
+            "diagram_detail": diagram["detail"],
         },
         "versions": {
             "python": platform.python_version(),
@@ -82,9 +91,9 @@ def check_environment() -> dict[str, Any]:
             "无需安装，固定版本可用。"
             if tested_version
             else (
-                "OfficeCLI 已全局安装；请重启 Codex 后继续。"
+                "OfficeCLI 已全局安装；请重启 coding agent 后继续。"
                 if pending_install
-                else f"是否全局安装 OfficeCLI？命令：`{OFFICECLI_INSTALL_COMMAND}`；已验证版本发布页：{OFFICECLI_DOWNLOAD_URL}"
+                else f"是否全局安装 OfficeCLI？命令：`{officecli_install_command()}`；已验证版本发布页：{OFFICECLI_DOWNLOAD_URL}"
             )
         ),
         "requires_user_input": requires_user_input,
@@ -113,6 +122,7 @@ def write_markdown(path: Path, data: dict[str, Any]) -> None:
         f"- OfficeCLI DOCX 生成：{'可用' if caps['docx_create'] else '不可用'}",
         f"- OpenXML 结构校验：{'可用' if caps['docx_openxml_validate'] else '不可用'}",
         f"- DOCX 预览：{'可用' if caps['docx_preview'] else '不可用'}",
+        f"- 图纸渲染（技术方案文档 DOT 图）：{'可用（' + data['capabilities']['diagram_backend'] + '）' if caps['diagram_render'] else '不可用'}（{data['capabilities']['diagram_detail']}）",
         f"- Word 原生页数校验：{'可能可用' if caps['native_word_page_count_possible'] else '需在 Word/WPS 中人工复核'}",
         "",
         "## 建议",
@@ -126,7 +136,7 @@ def write_markdown(path: Path, data: dict[str, Any]) -> None:
     ]
     if data.get("requires_user_input"):
         lines.extend([
-            "OfficeCLI 缺失、需要重启 Codex 或版本不匹配时必须停止，不得静默安装或退回其他 DOCX 后端。",
+            "OfficeCLI 缺失、需要重启 coding agent 或版本不匹配时必须停止，不得静默安装或退回其他 DOCX 后端。",
             "",
             "```text",
             "STOP_FOR_USER",

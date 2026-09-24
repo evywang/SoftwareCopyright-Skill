@@ -217,6 +217,8 @@ def write_evidence_md(path: Path, evidence: dict[str, Any]) -> None:
 def write_model_template(path: Path, evidence: dict[str, Any]) -> None:
     template = {
         "software_name": evidence["software_name"],
+        "manual_kind": "operation 或 design：软件有用户可见页面/图形界面时用 operation（生成操作手册）；"
+        "软件没有用户界面（嵌入式固件、驱动、库、后端服务、命令行工具等）时用 design（生成技术方案文档）",
         "product_positioning": "",
         "industry": "",
         "target_users": [],
@@ -253,6 +255,39 @@ def write_model_template(path: Path, evidence: dict[str, Any]) -> None:
                 "screenshot": "截图预留说明",
             }
         ],
+        "design_spec": {
+            "_说明": "仅 manual_kind 为 design 时填写；此时不要填写 manual_modules。",
+            "intro_note": "可选：引言补充说明。",
+            "requirements": ["按项目真实需求逐条填写，如运行在嵌入式环境中、控制接收机等"],
+            "conditions": "运行环境、开发环境、操作系统、交叉编译工具链和编程语言等条件与限制",
+            "architecture": "软件总体结构描述：部署形态、分层、与硬件/其他软件的关系",
+            "modules": [{"name": "真实模块名", "description": "该模块的功能描述"}],
+            "module_note": "可选：模块分层、依赖或调用关系的补充说明",
+            "overview": "2.6 设计和描述总述：主要功能如何组织、数据如何流动、重点设计是什么",
+            "key_designs": [{"title": "关键设计点名称", "description": "该设计的原理和流程说明", "figure": "流程图/类图等图类型；没有图则留空"}],
+            "functions": [{"title": "真实功能名称", "description": "该功能的设计说明和数据处理过程", "figure": "序列图/处理流等图类型；没有图则留空"}],
+            "ui_statement": "软件界面说明；无界面软件默认填 无。",
+            "api_groups": [
+                {
+                    "title": "接口分组名称，如 功能请求接口/数据传输接口/事件通知接口/串口协议",
+                    "summary": "该组接口的整体说明，如传输方式、端口、协议",
+                    "interfaces": [
+                        {
+                            "signature": "接口签名或名称，如 int fullscan(uint fc, uint bandwidth)",
+                            "description": "接口调用后的行为和效果说明",
+                            "params": [{"name": "fc", "type": "uint", "detail": "指定频段中心频率"}],
+                            "returns": "返回 0 为成功，其他值为错误码",
+                        }
+                    ],
+                }
+            ],
+            "error_handling": [{"title": "出错处理机制名称，如 事件通知/日志数据", "description": "该机制的说明"}],
+            "figures": {
+                "_说明": "可选。DOT 图源按插槽命名：architecture（总体结构框架图）、key_1..key_N（对应 key_designs）、function_1..function_N（对应 functions）。"
+                "声明后由 scripts/render_design_figures.py 渲染成 PNG 并嵌入正文；不声明或渲染失败时正文保留【图预留】占位。",
+                "architecture": "digraph G { rankdir=TB; 调度器 [shape=box]; 采集任务 [shape=box]; 通信任务 [shape=box]; 指令任务 [shape=box]; 采集任务 -> 队列 [label=数据]; 队列 -> 通信任务; 指令任务 -> 驱动层; }",
+            },
+        },
         "system_requirements": [
             {"item": "操作系统", "minimum": "按项目实际填写", "recommended": "按项目实际填写"},
             {"item": "浏览器或客户端", "minimum": "按项目实际填写", "recommended": "按项目实际填写"},
@@ -264,9 +299,12 @@ def write_model_template(path: Path, evidence: dict[str, Any]) -> None:
             {"term": "当前软件中的业务术语", "definition": "用普通中文解释含义。"}
         ],
         "model_review_notes": [
-            "操作手册应采用软著审核友好的通用骨架：相关文档、说明、功能特点、系统要求、按真实页面/流程逐章操作、常见问题、术语表。",
+            "有用户界面的软件：操作手册采用软著审核友好的通用骨架（相关文档、说明、功能特点、系统要求、按真实页面/流程逐章操作、常见问题、术语表）。",
+            "无用户界面的软件（嵌入式固件、驱动、库、后端服务等）：manual_kind 填 design，design_spec 按技术方案文档骨架填写（需求、条件与限制、总体结构、模块表、关键设计、功能设计、接口设计、出错处理）。",
             "manual_modules 要按当前项目真实页面、导航入口、按钮、输入限制、系统反馈和截图位置编写，不能只写抽象功能名。",
-            "不要照抄范本文案；范本只说明手册需要具体、可操作、能给审核员看懂。",
+            "design_spec 的模块、功能、接口必须来自真实项目源码和文档，不得编造项目中不存在的接口或模块。",
+            "figures 用 DOT 语言描述（architecture/key_n/function_n 插槽），图源必须对应真实模块结构；graphviz 不可用时不要声明 figures，保留【图预留】占位。",
+            "不要照抄范本文案；范本只说明结构要求，内容必须换成当前软件的真实设计。",
             "不要用关键词表决定行业和功能；必须能从项目证据或用户补充中解释来源。",
         ],
     }
@@ -294,6 +332,166 @@ def required_text(data: dict[str, Any], field: str) -> str:
     if not value:
         raise SystemExit(f"Model context field cannot be empty: {field}")
     return value
+
+
+MANUAL_KIND_ALIASES = {
+    "operation": "operation",
+    "manual": "operation",
+    "操作手册": "operation",
+    "design": "design",
+    "design-spec": "design",
+    "technical": "design",
+    "技术方案": "design",
+    "技术方案文档": "design",
+    "设计说明书": "design",
+}
+
+
+def normalize_manual_kind(model: dict[str, Any]) -> str:
+    """Decide whether the prose document is an operation manual or a technical design spec."""
+    raw = str(model.get("manual_kind") or "operation").strip()
+    kind = MANUAL_KIND_ALIASES.get(raw.lower() if raw.isascii() else raw)
+    if kind is None:
+        raise SystemExit(f"Model context manual_kind must be 'operation' or 'design'; got: {raw}")
+    return kind
+
+
+def _design_items(raw: Any, field: str, required_fields: tuple[str, ...], *, required: bool = True) -> list[dict[str, Any]]:
+    if not isinstance(raw, list):
+        if raw is None and not required:
+            return []
+        raise SystemExit(f"design_spec field must be a list: {field}")
+    items: list[dict[str, Any]] = []
+    for index, item in enumerate(raw, start=1):
+        if not isinstance(item, dict):
+            raise SystemExit(f"design_spec {field} item {index} must be an object")
+        missing = [name for name in required_fields if not str(item.get(name) or "").strip()]
+        if missing:
+            raise SystemExit(f"design_spec {field} item {index} missing field: {', '.join(missing)}")
+        items.append({name: str(item.get(name)).strip() for name in item if str(name).strip()})
+    if required and not items:
+        raise SystemExit(f"design_spec field cannot be empty: {field}")
+    return items
+
+
+def normalize_api_groups(raw: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw, list) or not raw:
+        raise SystemExit("design_spec field must be a non-empty list: api_groups")
+    groups: list[dict[str, Any]] = []
+    for group_index, group in enumerate(raw, start=1):
+        if not isinstance(group, dict):
+            raise SystemExit(f"design_spec api_groups item {group_index} must be an object")
+        title = str(group.get("title") or group.get("name") or "").strip()
+        if not title:
+            raise SystemExit(f"design_spec api_groups item {group_index} missing field: title")
+        raw_interfaces = group.get("interfaces")
+        if not isinstance(raw_interfaces, list) or not raw_interfaces:
+            raise SystemExit(f"design_spec api_groups item {group_index} ({title}) missing non-empty field: interfaces")
+        interfaces: list[dict[str, Any]] = []
+        for iface_index, iface in enumerate(raw_interfaces, start=1):
+            if not isinstance(iface, dict):
+                raise SystemExit(f"api_groups {title} interfaces item {iface_index} must be an object")
+            signature = str(iface.get("signature") or iface.get("name") or iface.get("title") or "").strip()
+            description = str(iface.get("description") or iface.get("summary") or "").strip()
+            if not signature or not description:
+                raise SystemExit(
+                    f"api_groups {title} interfaces item {iface_index} missing field: signature/description"
+                )
+            params: list[dict[str, str]] = []
+            raw_params = iface.get("params") or iface.get("parameters") or []
+            if isinstance(raw_params, list):
+                for param_index, param in enumerate(raw_params, start=1):
+                    if not isinstance(param, dict):
+                        raise SystemExit(f"接口 {signature} params item {param_index} must be an object")
+                    name = str(param.get("name") or "").strip()
+                    if not name:
+                        raise SystemExit(f"接口 {signature} params item {param_index} missing field: name")
+                    params.append(
+                        {
+                            "name": name,
+                            "type": str(param.get("type") or "").strip(),
+                            "detail": str(param.get("detail") or param.get("description") or param.get("value") or "").strip(),
+                        }
+                    )
+            interfaces.append(
+                {
+                    "signature": signature,
+                    "description": description,
+                    "params": params,
+                    "returns": str(iface.get("returns") or iface.get("result") or "").strip(),
+                }
+            )
+        groups.append(
+            {
+                "title": title,
+                "summary": str(group.get("summary") or group.get("description") or "").strip(),
+                "interfaces": interfaces,
+            }
+        )
+    return groups
+
+
+def normalize_design_spec(model: dict[str, Any]) -> dict[str, Any]:
+    """Validate the model-authored design spec used for no-GUI software."""
+    spec = model.get("design_spec")
+    if not isinstance(spec, dict):
+        raise SystemExit(
+            "Model context field must be an object: design_spec。"
+            "无用户界面的软件应设置 manual_kind 为 design 并提供 design_spec，不要填写 manual_modules。"
+        )
+    return {
+        "intro_note": str(spec.get("intro_note") or "").strip(),
+        "requirements": required_list(spec.get("requirements"), "design_spec.requirements"),
+        "conditions": required_text(spec, "conditions"),
+        "architecture": required_text(spec, "architecture"),
+        "modules": [
+            {
+                "name": str(item.get("name") or item.get("title") or "").strip(),
+                "description": str(item.get("description") or item.get("function") or "").strip(),
+            }
+            for item in _design_items(spec.get("modules"), "modules", ("name", "description"))
+        ],
+        "module_note": str(spec.get("module_note") or "").strip(),
+        "overview": required_text(spec, "overview"),
+        "key_designs": _design_items(
+            spec.get("key_designs") or [], "key_designs", ("title", "description"), required=False
+        ),
+        "functions": _design_items(spec.get("functions"), "functions", ("title", "description")),
+        "ui_statement": str(spec.get("ui_statement") or "无。").strip(),
+        "api_groups": normalize_api_groups(spec.get("api_groups")),
+        "error_handling": _design_items(spec.get("error_handling"), "error_handling", ("title", "description")),
+        "figures": normalize_figures(spec),
+    }
+
+
+def normalize_figures(spec: dict[str, Any]) -> dict[str, str]:
+    """Validate DOT figure sources keyed by slot (architecture, key_n, function_n)."""
+    figures = spec.get("figures")
+    if figures is None:
+        return {}
+    if not isinstance(figures, dict):
+        raise SystemExit("design_spec field must be an object: figures")
+    normalized: dict[str, str] = {}
+    for key, value in figures.items():
+        key = str(key).strip()
+        if not re.fullmatch(r"(architecture|key_[1-9][0-9]*|function_[1-9][0-9]*)", key):
+            raise SystemExit(
+                f"design_spec.figures key must be architecture, key_<n> or function_<n>; got: {key}"
+            )
+        dot = str(value or "").strip()
+        if not dot:
+            raise SystemExit(f"design_spec.figures.{key} 不能为空，请填写 DOT 图源或删除该条目")
+        normalized[key] = dot
+    key_designs = spec.get("key_designs") or []
+    functions = spec.get("functions") or []
+    for key in normalized:
+        match = re.fullmatch(r"key_(\d+)", key)
+        if match and int(match.group(1)) > len(key_designs):
+            raise SystemExit(f"design_spec.figures.{key} 超出 key_designs 范围")
+        match = re.fullmatch(r"function_(\d+)", key)
+        if match and int(match.group(1)) > len(functions):
+            raise SystemExit(f"design_spec.figures.{key} 超出 functions 范围")
+    return normalized
 
 
 def effective_len(value: str) -> int:
@@ -326,45 +524,56 @@ def normalize_model_context(model: dict[str, Any], evidence: dict[str, Any], web
     sections = model.get("manual_sections") or []
     if sections and not isinstance(sections, list):
         raise SystemExit("Model context field must be a list: manual_sections")
-    manual_modules = model.get("manual_modules") or []
-    if manual_modules and not isinstance(manual_modules, list):
-        raise SystemExit("Model context field must be a list: manual_modules")
-    if not manual_modules:
-        raise SystemExit("Model context field cannot be empty: manual_modules")
-    for index, module in enumerate(manual_modules, start=1):
-        if not isinstance(module, dict):
-            raise SystemExit(f"manual_modules item {index} must be an object")
-        title = str(module.get("title") or module.get("feature") or "").strip()
-        for field in ("purpose", "usage", "entry", "operation_steps", "feedback"):
-            value = module.get(field)
-            if field == "usage" and not str(value or "").strip():
-                value = module.get("usage_scenario")
-            if isinstance(value, list):
-                missing_value = not any(str(item).strip() for item in value)
-            else:
-                missing_value = not str(value or "").strip()
-            if missing_value:
-                raise SystemExit(f"manual_modules item {index} ({title or 'untitled'}) missing field: {field}")
+    manual_kind = normalize_manual_kind(model)
+    design_spec: dict[str, Any] | None = None
+    if manual_kind == "design":
+        design_spec = normalize_design_spec(model)
+        manual_modules = model.get("manual_modules") or []
+        if manual_modules:
+            raise SystemExit(
+                "manual_kind 为 design 时不要填写 manual_modules；无界面软件的设计内容统一写入 design_spec。"
+            )
+    else:
+        manual_modules = model.get("manual_modules") or []
+        if manual_modules and not isinstance(manual_modules, list):
+            raise SystemExit("Model context field must be a list: manual_modules")
+        if not manual_modules:
+            raise SystemExit("Model context field cannot be empty: manual_modules")
+        for index, module in enumerate(manual_modules, start=1):
+            if not isinstance(module, dict):
+                raise SystemExit(f"manual_modules item {index} must be an object")
+            title = str(module.get("title") or module.get("feature") or "").strip()
+            for field in ("purpose", "usage", "entry", "operation_steps", "feedback"):
+                value = module.get(field)
+                if field == "usage" and not str(value or "").strip():
+                    value = module.get("usage_scenario")
+                if isinstance(value, list):
+                    missing_value = not any(str(item).strip() for item in value)
+                else:
+                    missing_value = not str(value or "").strip()
+                if missing_value:
+                    raise SystemExit(f"manual_modules item {index} ({title or 'untitled'}) missing field: {field}")
     system_requirements = model.get("system_requirements") or []
     if system_requirements and not isinstance(system_requirements, list):
         raise SystemExit("Model context field must be a list: system_requirements")
-    if not system_requirements:
+    if not system_requirements and manual_kind != "design":
         raise SystemExit("Model context field cannot be empty: system_requirements")
     faq = model.get("faq") or []
     if faq and not isinstance(faq, list):
         raise SystemExit("Model context field must be a list: faq")
-    if not faq:
+    if not faq and manual_kind != "design":
         raise SystemExit("Model context field cannot be empty: faq")
     glossary = model.get("glossary") or []
     if glossary and not isinstance(glossary, list):
         raise SystemExit("Model context field must be a list: glossary")
-    if not glossary:
+    if not glossary and manual_kind != "design":
         raise SystemExit("Model context field cannot be empty: glossary")
     context = {
         "software_name": evidence["software_name"],
         "business_understanding_required": True,
         "source_documents": [{"path": doc["path"], "size": doc["size"]} for doc in evidence["documents"]],
         "project_evidence_file": "业务理解证据.md",
+        "manual_kind": manual_kind,
         "product_positioning": required_text(model, "product_positioning"),
         "industry": industry,
         "target_users": required_list(model.get("target_users"), "target_users"),
@@ -387,12 +596,22 @@ def normalize_model_context(model: dict[str, Any], evidence: dict[str, Any], web
         "confirmation_required": True,
         "user_confirmed": False,
         "confirmation_stage": "business",
-        "next_action": "请确认 草稿/业务理解.md 中的软件用途、行业、目标用户、核心功能、手册结构和申请口径；确认后运行 confirm_stage.py --stage business。",
-        "review_notes": [
-            "请确认模型判断的行业领域、目标用户和主要功能是否符合实际申报口径。",
-            "请确认操作手册结构是否按真实页面和流程展开，而不是套用抽象功能列表。",
-        ],
+        "next_action": "请确认 草稿/业务理解.md 中的软件用途、行业、目标用户、核心功能、文档类型和申请口径；确认后运行 confirm_stage.py --stage business。",
+        "review_notes": (
+            [
+                "请确认模型判断的行业领域、目标用户和主要功能是否符合实际申报口径。",
+                "请确认软件确实没有面向用户的图形界面/页面，文档类型选择技术方案文档是否正确。",
+                "请确认技术方案文档中的模块划分、关键设计、功能流程和接口描述是否与项目源码一致。",
+            ]
+            if manual_kind == "design"
+            else [
+                "请确认模型判断的行业领域、目标用户和主要功能是否符合实际申报口径。",
+                "请确认操作手册结构是否按真实页面和流程展开，而不是套用抽象功能列表。",
+            ]
+        ),
     }
+    if design_spec is not None:
+        context["design_spec"] = design_spec
     return context
 
 
@@ -417,31 +636,48 @@ def write_context_md(path: Path, context: dict[str, Any]) -> None:
         lines.append(f"- {item}：{context['business_feature_details'].get(item, '')}")
     lines.extend(["", "## 典型操作流程", ""])
     lines.extend(f"{i}. {item}" for i, item in enumerate(context["operation_flow"], start=1))
-    if context.get("manual_sections"):
-        lines.extend(["", "## 操作手册结构建议", ""])
-        for i, section in enumerate(context["manual_sections"], start=1):
-            if isinstance(section, dict):
-                title = section.get("title") or f"章节 {i}"
-                intent = section.get("intent") or ""
-            else:
-                title = str(section)
-                intent = ""
-            lines.append(f"{i}. {title}" + (f"：{intent}" if intent else ""))
-    if context.get("manual_modules"):
-        lines.extend(["", "## 操作手册页面/流程模块", ""])
-        for i, module in enumerate(context["manual_modules"], start=1):
-            if not isinstance(module, dict):
-                lines.append(f"{i}. {module}")
-                continue
-            title = module.get("title") or module.get("feature") or f"模块 {i}"
-            usage = module.get("usage") or module.get("usage_scenario") or ""
-            entry = module.get("entry") or ""
-            steps = module.get("operation_steps") or module.get("steps") or []
-            lines.append(f"{i}. {title}" + (f"：{entry}" if entry else ""))
-            if usage:
-                lines.append(f"   - 使用场景：{usage}")
-            if steps:
-                lines.append(f"   - 操作要点：{'；'.join(str(item) for item in steps[:4])}")
+    if context.get("manual_kind") == "design":
+        spec = context.get("design_spec") or {}
+        lines.extend(["", "## 技术方案文档设计要点", ""])
+        lines.append("- 文档类型：技术方案文档（软件无用户图形界面，不生成操作手册）")
+        if spec.get("modules"):
+            module_names = "、".join(str(item.get("name") or "") for item in spec["modules"][:12])
+            lines.append(f"- 设计模块：{module_names}")
+        if spec.get("functions"):
+            function_names = "、".join(str(item.get("title") or "") for item in spec["functions"][:12])
+            lines.append(f"- 功能设计：{function_names}")
+        for group in spec.get("api_groups") or []:
+            count = len(group.get("interfaces") or [])
+            lines.append(f"- 接口设计：{group.get('title')}（{count} 个接口）")
+        if spec.get("error_handling"):
+            handling_names = "、".join(str(item.get("title") or "") for item in spec["error_handling"])
+            lines.append(f"- 出错处理：{handling_names}")
+    else:
+        if context.get("manual_sections"):
+            lines.extend(["", "## 操作手册结构建议", ""])
+            for i, section in enumerate(context["manual_sections"], start=1):
+                if isinstance(section, dict):
+                    title = section.get("title") or f"章节 {i}"
+                    intent = section.get("intent") or ""
+                else:
+                    title = str(section)
+                    intent = ""
+                lines.append(f"{i}. {title}" + (f"：{intent}" if intent else ""))
+        if context.get("manual_modules"):
+            lines.extend(["", "## 操作手册页面/流程模块", ""])
+            for i, module in enumerate(context["manual_modules"], start=1):
+                if not isinstance(module, dict):
+                    lines.append(f"{i}. {module}")
+                    continue
+                title = module.get("title") or module.get("feature") or f"模块 {i}"
+                usage = module.get("usage") or module.get("usage_scenario") or ""
+                entry = module.get("entry") or ""
+                steps = module.get("operation_steps") or module.get("steps") or []
+                lines.append(f"{i}. {title}" + (f"：{entry}" if entry else ""))
+                if usage:
+                    lines.append(f"   - 使用场景：{usage}")
+                if steps:
+                    lines.append(f"   - 操作要点：{'；'.join(str(item) for item in steps[:4])}")
     lines.extend(
         [
             "",

@@ -16,8 +16,15 @@ from typing import Any
 
 TESTED_OFFICECLI_VERSION = "1.0.151"
 OFFICECLI_DOWNLOAD_URL = "https://github.com/iOfficeAI/OfficeCLI/releases/tag/v1.0.151"
-OFFICECLI_INSTALL_URL = "https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.ps1"
-OFFICECLI_INSTALL_COMMAND = f"irm {OFFICECLI_INSTALL_URL} | iex"
+OFFICECLI_WINDOWS_INSTALL_URL = "https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.ps1"
+OFFICECLI_POSIX_INSTALL_URL = "https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh"
+
+
+def officecli_install_command() -> str:
+    """Return the official global install command for the current platform."""
+    if os.name == "nt":
+        return f"irm {OFFICECLI_WINDOWS_INSTALL_URL} | iex"
+    return f"curl -fsSL {OFFICECLI_POSIX_INSTALL_URL} | bash"
 
 
 class OfficeCliError(RuntimeError):
@@ -74,9 +81,9 @@ class OfficeCli:
         resolved = resolve_officecli()
         if resolved is None:
             raise OfficeCliError(
-                "当前 Codex 进程无法调用全局 officecli。请按官方方式全局安装 OfficeCLI，"
-                "然后重启 Codex 再继续："
-                f"{OFFICECLI_INSTALL_COMMAND}"
+                "当前 coding agent 进程无法调用全局 officecli。请按官方方式全局安装 OfficeCLI，"
+                "然后重启 coding agent 再继续："
+                f"{officecli_install_command()}"
             )
         self.executable = resolved
         self.version = self._read_version()

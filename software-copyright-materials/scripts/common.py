@@ -7,6 +7,11 @@ import json
 import hashlib
 import os
 import re
+import shutil
+import struct
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -404,9 +409,280 @@ def draft_snapshot(workdir: Path) -> dict[str, str]:
     return snapshot
 
 
+PROSE_DOC_FILES = {
+    "operation": ("操作手册.md", "操作手册自检记录.md", "操作手册自检记录.json", "_操作手册.docx"),
+    "design": ("技术方案文档.md", "技术方案文档自检记录.md", "技术方案文档自检记录.json", "_技术方案文档.docx"),
+}
+
+DIAGRAM_PROBE_DOT = "digraph G { 图纸能力检测 -> 渲染输出; }"
+DIAGRAM_BACKEND_ORDER = (
+    "dot-png",
+    "dot-svg-cairosvg",
+    "dot-svg-inkscape",
+    "dot-svg-librsvg",
+    "dot-svg-imagemagick",
+)
+
+CJK_FONT_PREFERENCE = (
+    "Noto Sans CJK SC",
+    "Source Han Sans SC",
+    "WenQuanYi Micro Hei",
+    "Droid Sans Fallback",
+    "AR PL UMing CN",
+    "SimHei",
+    "Microsoft YaHei",
+)
+
+DOT_LAYOUT_DPI = 150
+
+DOT_DEFAULTS_TEMPLATE = (
+    'graph [rankdir=TB, nodesep=0.45, ranksep=0.7, splines=ortho, '
+    'fontname="{font}", fontsize=12, bgcolor="white", pad="0.3", labeljust=l];\n'
+    'node [shape=box, style="rounded,filled", fillcolor="#F5F7FA", color="#4A6FA5", '
+    'fontname="{font}", fontsize=12, width=2.2, margin="0.18,0.1"];\n'
+    'edge [color="#4A6FA5", fontname="{font}", fontsize=10, arrowsize=0.7];\n'
+)
+
+DOT_GRAPH_OPEN_RE = re.compile(r"\b(?:strict\s+)?(?:digraph|graph)\s+[^\s{]+\s*\{")
+
+
+def detect_cjk_font() -> str | None:
+    """Pick a CJK-capable font for DOT text, preferring fonts known to render Chinese."""
+    if os.name == "nt":
+        return "Microsoft YaHei"
+    if sys.platform == "darwin":
+        return "PingFang SC"
+    try:
+        completed = subprocess.run(
+            ["fc-list", ":lang=zh", "family"], capture_output=True, text=True, timeout=30, check=False
+        )
+        if completed.returncode == 0:
+            available = {line.strip() for line in completed.stdout.splitlines() if line.strip()}
+            for font in CJK_FONT_PREFERENCE:
+                if font in available:
+                    return font
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return None
+
+
+def _label_lines(value: str) -> list[str]:
+    """Split a DOT label into visual lines; \\n, \\l and \\r are all line breaks."""
+    return re.split(r"\\[nlr]", value)
+
+
+def normalize_dot_source(dot_source: str) -> str:
+    """Inject canonical layout defaults right after the graph opening brace.
+
+    DOT semantics: later attribute statements override earlier ones, so
+    defaults injected before the model's content lose to any explicit
+    graph/node/edge statement the model wrote. Orthogonal edges cannot carry
+    edge labels (graphviz misplaces them), so diagrams with edge labels get
+    polyline splines instead unless the model chose splines explicitly.
+    """
+    match = DOT_GRAPH_OPEN_RE.search(dot_source)
+    if not match:
+        return dot_source
+    font = detect_cjk_font() or "Droid Sans Fallback"
+    has_edge_labels = bool(re.search(r"->[^;\[]*\[[^\]]*label\s*=", dot_source))
+    model_chose_splines = bool(re.search(r"\bsplines\s*=", dot_source))
+    spline = "polyline" if has_edge_labels and not model_chose_splines else "ortho"
+    preamble = DOT_DEFAULTS_TEMPLATE.format(font=font).replace("splines=ortho", f"splines={spline}")
+    position = match.end()
+    return dot_source[:position] + "\n" + preamble + dot_source[position:]
+
+
+def lint_dot_source(dot_source: str) -> tuple[list[str], list[str]]:
+    """Check DOT source for layout anti-patterns. Returns (blocking, advisory) issues."""
+    blocking: list[str] = []
+    advisory: list[str] = []
+    cleaned = re.sub(r"//[^\n]*", "", dot_source)
+    cleaned = re.sub(r"/\*.*?\*/", "", cleaned, flags=re.S)
+    for match in re.finditer(r"label\s*=\s*\"((?:[^\"\\]|\\.)*)\"", cleaned):
+        for line in _label_lines(match.group(1)):
+            if len(line) > 24:
+                blocking.append(f"标签单行 {len(line)} 字未换行，渲染会撑宽节点导致排版混乱：{line[:16]}…")
+                break
+    for match in re.finditer(r'"((?:[^"\\]|\\.)*)"', cleaned):
+        prefix = cleaned[max(0, match.start() - 12):match.start()]
+        if re.search(r"=\s*$", prefix):
+            continue
+        for line in _label_lines(match.group(1)):
+            if len(line) > 24:
+                blocking.append(f"节点名单行 {len(line)} 字未换行，渲染会撑宽节点导致排版混乱：{line[:16]}…")
+                break
+    for match in re.finditer(r"label\s*=\s*<(.*?)>", cleaned, flags=re.S):
+        label = match.group(1)
+        if "<BR/>" not in label.upper() and max((len(line) for line in label.splitlines()), default=0) > 24:
+            blocking.append("HTML 标签内容过长且缺少 <BR/> 换行，渲染会溢出节点")
+    if len(re.findall(r"->", cleaned)) > 12:
+        advisory.append(f"连线 {cleaned.count('->')} 条，过多易交叉重叠，建议按层拆分或减少跨层连线")
+    if len(re.findall(r"label\s*=", cleaned)) > 4:
+        advisory.append("标签文字过多，边标签容易与节点重叠，建议精简或移到正文")
+    if not re.search(r"\bsplines\s*=", cleaned):
+        advisory.append("未指定 splines，曲线边在密集图中容易互相穿越，建议 splines=ortho")
+    return blocking, advisory
+
+
+def check_png_layout(png_path: Path, *, allow_wide: bool = False) -> list[str]:
+    """Return advisory issues for a rendered PNG whose aspect ratio looks unbalanced.
+
+    allow_wide is set for rankdir=LR diagrams where a wide canvas is intended.
+    """
+    issues: list[str] = []
+    try:
+        with png_path.open("rb") as handle:
+            header = handle.read(33)
+        if len(header) < 24 or header[:8] != b"\x89PNG\r\n\x1a\n":
+            return issues
+        width, height = struct.unpack(">II", header[16:24])
+        if width == 0 or height == 0:
+            return ["PNG 尺寸异常"]
+        ratio = width / height
+        if allow_wide:
+            if ratio > 6:
+                issues.append(
+                    f"横向图过于扁平（{width}×{height}，比值 {ratio:.1f}），插入竖版 Word 后文字不可读，"
+                    "建议改用 rankdir=TB 或把长链拆成多行"
+                )
+            elif ratio < 1 / 5:
+                issues.append(f"图片宽高比失衡（{width}×{height}），纵向流程图可能拉得过长")
+        elif ratio > 3.5 or ratio < 1 / 3.5:
+            issues.append(f"图片宽高比失衡（{width}×{height}，比值 {ratio:.1f}），布局可能拉扁或拥挤")
+    except OSError:
+        issues.append("PNG 无法读取，布局无法校验")
+    return issues
+
+
+def _module_available(name: str) -> bool:
+    import importlib.util
+
+    return importlib.util.find_spec(name) is not None
+
+
+def _run_probe(command: list[str], *, input_bytes: bytes | None = None, stdout_path: Path | None = None) -> bool:
+    try:
+        if stdout_path is not None:
+            with stdout_path.open("wb") as handle:
+                completed = subprocess.run(
+                    command, input=input_bytes, stdout=handle, stderr=subprocess.PIPE,
+                    timeout=120, check=False,
+                )
+        else:
+            completed = subprocess.run(
+                command, input=input_bytes, capture_output=True, timeout=120, check=False,
+            )
+        return completed.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _probe_dot_png(dot: str, probe_dir: Path) -> bool:
+    output = probe_dir / "probe.png"
+    return _run_probe([dot, "-Tpng"], input_bytes=DIAGRAM_PROBE_DOT.encode("utf-8"), stdout_path=output) and (
+        output.is_file() and output.stat().st_size > 0
+    )
+
+
+def _probe_dot_svg(dot: str, probe_dir: Path) -> Path | None:
+    output = probe_dir / "probe.svg"
+    if not _run_probe([dot, "-Tsvg"], input_bytes=DIAGRAM_PROBE_DOT.encode("utf-8"), stdout_path=output):
+        return None
+    if not (output.is_file() and output.stat().st_size > 0):
+        return None
+    return output
+
+
+def _probe_svg_converter(svg: Path, converter: str, probe_dir: Path) -> bool:
+    output = probe_dir / f"probe-{converter}.png"
+    if converter == "cairosvg":
+        command = [sys.executable, "-m", "cairosvg", str(svg), "-o", str(output)]
+    elif converter == "inkscape":
+        command = ["inkscape", str(svg), "-o", str(output)]
+    elif converter == "librsvg":
+        command = ["rsvg-convert", "-o", str(output), str(svg)]
+    else:
+        command = ["convert", str(svg), str(output)]
+    return _run_probe(command) and output.is_file() and output.stat().st_size > 0
+
+
+def detect_diagram_backends() -> dict[str, Any]:
+    """Probe the system for a working DOT -> PNG rendering chain.
+
+    Returns the ordered list of usable backends. The first entry is the
+    preferred backend; an empty list means no chain works on this system.
+    """
+    dot = shutil.which("dot")
+    if not dot:
+        return {
+            "available": False,
+            "backend": "none",
+            "backends": [],
+            "detail": "未安装 graphviz（dot 命令不可用）",
+        }
+    probe_dir = Path(tempfile.mkdtemp(prefix="diagram-probe-"))
+    try:
+        backends: list[str] = []
+        if _probe_dot_png(dot, probe_dir):
+            backends.append("dot-png")
+        svg = _probe_dot_svg(dot, probe_dir)
+        if svg is not None:
+            converters = []
+            if _module_available("cairosvg"):
+                converters.append("cairosvg")
+            if shutil.which("inkscape"):
+                converters.append("inkscape")
+            if shutil.which("rsvg-convert"):
+                converters.append("librsvg")
+            if shutil.which("convert"):
+                converters.append("imagemagick")
+            for converter in converters:
+                if _probe_svg_converter(svg, converter, probe_dir):
+                    backends.append(f"dot-svg-{converter}")
+        if not backends:
+            return {
+                "available": False,
+                "backend": "none",
+                "backends": [],
+                "detail": "已安装 graphviz 但 PNG/SVG 输出均不可用，且缺少可用的 SVG 转换器"
+                "（cairosvg / inkscape / librsvg / imagemagick 任一即可）",
+            }
+        return {
+            "available": True,
+            "backend": backends[0],
+            "backends": backends,
+            "detail": "可用渲染链：" + "、".join(backends),
+        }
+    finally:
+        shutil.rmtree(probe_dir, ignore_errors=True)
+
+
+def diagram_install_hint() -> str:
+    """Return a platform-aware graphviz install command for the current OS."""
+    if os.name == "nt":
+        return "winget install graphviz（或 choco install graphviz / scoop install graphviz）"
+    if sys.platform == "darwin":
+        return "brew install graphviz"
+    return "sudo apt install graphviz（或对应发行版的包管理器安装 graphviz）"
+
+
+def draft_manual_kind(draft_dir: Path) -> str:
+    """Return the prose document kind declared by the business context."""
+    business = draft_dir / "业务理解.json"
+    if not business.is_file():
+        return "operation"
+    try:
+        data = read_json(business)
+    except Exception:
+        return "operation"
+    return "design" if isinstance(data, dict) and data.get("manual_kind") == "design" else "operation"
+
+
 def draft_completeness_issues(workdir: Path) -> list[str]:
     """Validate that every draft needed by the final builder exists and is coherent."""
     draft_dir = workdir / "草稿"
+    kind = draft_manual_kind(draft_dir)
+    doc_md, review_md, review_json, _docx_name = PROSE_DOC_FILES[kind]
     required = [
         "业务理解.md",
         "业务理解.json",
@@ -414,11 +690,14 @@ def draft_completeness_issues(workdir: Path) -> list[str]:
         "代码提取清单.md",
         "代码提取清单.json",
         "申请表信息.md",
-        "操作手册.md",
-        "操作手册自检记录.md",
-        "操作手册自检记录.json",
+        doc_md,
+        review_md,
+        review_json,
     ]
     issues = [f"缺少 草稿/{name}" for name in required if not (draft_dir / name).is_file()]
+    other_md = PROSE_DOC_FILES["design" if kind == "operation" else "operation"][0]
+    if (draft_dir / other_md).is_file():
+        issues.append(f"存在与当前文档类型（{doc_md}）冲突的旧草稿：{other_md}")
     manifest_path = draft_dir / "代码提取清单.json"
     if not manifest_path.is_file():
         return issues
@@ -441,16 +720,16 @@ def draft_completeness_issues(workdir: Path) -> list[str]:
     stale = sorted(name for name in KNOWN_CODE_DRAFTS - declared if (draft_dir / name).exists())
     if stale:
         issues.append("存在与当前代码提取模式冲突的旧草稿：" + "、".join(stale))
-    review_path = draft_dir / "操作手册自检记录.json"
+    review_path = draft_dir / review_json
     if review_path.is_file():
         try:
             review = read_json(review_path)
             rounds = review.get("rounds") if isinstance(review, dict) else None
             last_issues = rounds[-1].get("issues") if isinstance(rounds, list) and rounds else None
             if isinstance(last_issues, list) and last_issues:
-                issues.append("操作手册自检仍有未解决问题：" + "；".join(str(item) for item in last_issues[:5]))
+                issues.append(f"{doc_md}自检仍有未解决问题：" + "；".join(str(item) for item in last_issues[:5]))
         except Exception as exc:
-            issues.append(f"草稿/操作手册自检记录.json 无法读取：{exc}")
+            issues.append(f"草稿/{review_json} 无法读取：{exc}")
     return issues
 
 
