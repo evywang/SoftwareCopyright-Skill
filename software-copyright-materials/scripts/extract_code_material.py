@@ -89,8 +89,167 @@ def available_pages_from_selection(selection_path: Path | None, lines_per_page: 
     return available_lines, pages, unselected
 
 
-def marker_for(path: Path, project: Path) -> str:
-    return f"// File: {rel(path, project)}"
+COMMENT_STYLE_BY_EXT = {
+    ".py": "hash", ".sh": "hash", ".bash": "hash", ".zsh": "hash", ".rb": "hash",
+    ".pl": "hash", ".pm": "hash", ".r": "hash", ".yaml": "hash", ".yml": "hash",
+    ".toml": "hash", ".ini": "hash", ".conf": "hash", ".cfg": "hash", ".env": "hash",
+    ".gd": "hash", ".tcl": "hash", ".cmake": "hash", ".mk": "hash",
+    ".sql": "dash", ".lua": "dash", ".hs": "dash", ".elm": "dash",
+}
+
+
+def detect_comment_style(path: Path) -> str:
+    """Return the comment syntax family for a file extension (c-style default)."""
+    return COMMENT_STYLE_BY_EXT.get(path.suffix.lower(), "c")
+
+
+def _strip_c_style(text: str) -> list[str]:
+    """Remove // and /* */ comments with single-line string awareness."""
+    kept: list[str] = []
+    in_block = False
+    for line in text.splitlines():
+        result: list[str] = []
+        in_string: str | None = None
+        i = 0
+        n = len(line)
+        while i < n:
+            ch = line[i]
+            nxt = line[i + 1] if i + 1 < n else ""
+            if in_block:
+                if ch == "*" and nxt == "/":
+                    in_block = False
+                    i += 2
+                else:
+                    i += 1
+                continue
+            if in_string:
+                result.append(ch)
+                if ch == "\\" and nxt:
+                    result.append(nxt)
+                    i += 2
+                    continue
+                if ch == in_string:
+                    in_string = None
+                i += 1
+                continue
+            if ch == "/" and nxt == "/":
+                break
+            if ch == "/" and nxt == "*":
+                in_block = True
+                i += 2
+                continue
+            if ch in ('"', "'", "`"):
+                in_string = ch
+            result.append(ch)
+            i += 1
+        cleaned = "".join(result).rstrip()
+        if cleaned.strip():
+            kept.append(cleaned)
+    return kept
+
+
+def _strip_hash_style(text: str) -> list[str]:
+    """Remove full-line/inline # comments and standalone docstrings (hash languages)."""
+    kept: list[str] = []
+    docstring_fence: str | None = None
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if docstring_fence:
+            if docstring_fence in stripped:
+                rest = stripped.split(docstring_fence, 1)[1]
+                docstring_fence = None
+                if rest.strip() and not rest.lstrip().startswith("#"):
+                    kept.append(rest)
+            continue
+        if stripped.startswith(("'''", '"""')):
+            fence = stripped[:3]
+            rest = stripped[3:]
+            if fence in rest:
+                rest = rest.split(fence, 1)[1]
+                if rest.strip() and not rest.lstrip().startswith("#"):
+                    kept.append(rest)
+            else:
+                docstring_fence = fence
+            continue
+        if stripped.startswith("#"):
+            continue
+        result: list[str] = []
+        in_string: str | None = None
+        i = 0
+        n = len(line)
+        while i < n:
+            ch = line[i]
+            nxt = line[i + 1] if i + 1 < n else ""
+            if in_string:
+                result.append(ch)
+                if ch == "\\" and nxt:
+                    result.append(nxt)
+                    i += 2
+                    continue
+                if ch == in_string:
+                    in_string = None
+                i += 1
+                continue
+            if ch in ('"', "'"):
+                in_string = ch
+                result.append(ch)
+                i += 1
+                continue
+            if ch == "#":
+                break
+            result.append(ch)
+            i += 1
+        cleaned = "".join(result).rstrip()
+        if cleaned.strip():
+            kept.append(cleaned)
+    return kept
+
+
+def _strip_dash_style(text: str) -> list[str]:
+    """Remove full-line and inline -- comments with string awareness."""
+    kept: list[str] = []
+    for line in text.splitlines():
+        if line.lstrip().startswith("--"):
+            continue
+        result: list[str] = []
+        in_string = False
+        i = 0
+        n = len(line)
+        while i < n:
+            ch = line[i]
+            nxt = line[i + 1] if i + 1 < n else ""
+            if in_string:
+                result.append(ch)
+                if ch == "'" and nxt == "'":
+                    result.append(nxt)
+                    i += 2
+                    continue
+                if ch == "'":
+                    in_string = False
+                i += 1
+                continue
+            if ch == "'":
+                in_string = True
+                result.append(ch)
+                i += 1
+                continue
+            if ch == "-" and nxt == "-":
+                break
+            result.append(ch)
+            i += 1
+        cleaned = "".join(result).rstrip()
+        if cleaned.strip():
+            kept.append(cleaned)
+    return kept
+
+
+def strip_code_comments(text: str, style: str) -> list[str]:
+    """Strip comments and drop blank/comment-only lines for one comment family."""
+    if style == "hash":
+        return _strip_hash_style(text)
+    if style == "dash":
+        return _strip_dash_style(text)
+    return _strip_c_style(text)
 
 
 def display_width(text: str) -> int:
@@ -128,9 +287,9 @@ def source_code_lines(text: str) -> list[str]:
     return [line for line in text.splitlines() if line.strip()]
 
 
-def material_code_lines(text: str, max_columns: int = MAX_CODE_COLUMNS) -> list[str]:
+def material_code_lines(text: str, max_columns: int = MAX_CODE_COLUMNS, style: str = "c") -> list[str]:
     lines: list[str] = []
-    for source_line in source_code_lines(text):
+    for source_line in strip_code_comments(text, style):
         lines.extend(wrap_display_line(source_line, max_columns))
     return lines
 
@@ -184,26 +343,25 @@ def collect_code_lines(project: Path, selection_path: Path | None) -> tuple[list
             continue
         text = read_text(path)
         source_lines = text.splitlines()
-        selected_source_lines = source_code_lines(text)
-        selected_lines = material_code_lines(text)
-        if not selected_source_lines:
+        non_blank_lines = [line for line in source_lines if line.strip()]
+        style = detect_comment_style(path)
+        stripped_lines = strip_code_comments(text, style)
+        selected_lines = material_code_lines(text, MAX_CODE_COLUMNS, style)
+        if not stripped_lines:
             continue
         start = len(all_lines) + 1
-        marker = marker_for(path, project)
-        marker_lines = wrap_display_line(marker)
-        all_lines.extend(marker_lines)
         all_lines.extend(selected_lines)
         end = len(all_lines)
-        source_end_line = len(source_lines)
         manifest_files.append(
             {
                 "path": rel(path, project),
                 "source_line_count": len(source_lines),
-                "blank_line_count": len(source_lines) - len(selected_source_lines),
+                "blank_line_count": len(source_lines) - len(non_blank_lines),
+                "comment_line_count": len(non_blank_lines) - len(stripped_lines),
                 "selected_line_start": 1,
-                "selected_line_end": source_end_line,
-                "selected_line_count": len(selected_source_lines),
-                "material_line_count": len(marker_lines) + len(selected_lines),
+                "selected_line_end": len(source_lines),
+                "selected_line_count": len(stripped_lines),
+                "material_line_count": len(selected_lines),
                 "material_line_start": start,
                 "material_line_end": end,
             }
